@@ -26,10 +26,10 @@ description here (python/__init__.py).
 # import swig generated symbols into the edacs namespace
 try:
 	# this might fail if the module is python-only
-	from edacs_swig import *
+	from .edacs_swig import *
 except ImportError:
 	pass
 
 # import any pure python here
-from trunked_radio import trunked_radio
+from .trunked_radio import trunked_radio
 #

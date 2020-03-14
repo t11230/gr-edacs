@@ -38,7 +38,13 @@ if(NOT edacs_sources)
 endif(NOT edacs_sources)
 
 add_library(gnuradio-edacs SHARED ${edacs_sources})
-target_link_libraries(gnuradio-edacs ${Boost_LIBRARIES} ${GNURADIO_ALL_LIBRARIES})
+
+target_link_libraries(gnuradio-edacs 
+    ${Boost_LIBRARIES} 
+    gnuradio::gnuradio-runtime
+    gnuradio-fft
+)
+
 set_target_properties(gnuradio-edacs PROPERTIES DEFINE_SYMBOL "gnuradio_edacs_EXPORTS")
 
 if(APPLE)
@@ -69,7 +75,7 @@ add_executable(test-edacs ${test_edacs_sources})
 
 target_link_libraries(
   test-edacs
-  ${GNURADIO_RUNTIME_LIBRARIES}
+  gnuradio::gnuradio-runtime
   ${Boost_LIBRARIES}
   ${CPPUNIT_LIBRARIES}
   gnuradio-edacs

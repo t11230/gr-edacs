@@ -11,7 +11,6 @@ from gnuradio import digital
 from gnuradio import filter
 from gnuradio import gr
 from gnuradio.filter import firdes
-from grc_gnuradio import blks2 as grc_blks2
 import dsd
 import edacs
 import math
@@ -109,7 +108,7 @@ class trunked_radio(gr.hier_block2):
         self.blocks_multiply_xx_1 = blocks.multiply_vcc(1)
         self.blocks_multiply_xx_0 = blocks.multiply_vcc(1)
         self.blocks_delay_0 = blocks.delay(gr.sizeof_gr_complex*1, 1024)
-        self.blks2_selector_1 = grc_blks2.selector(
+        self.blks2_selector_1 = blocks.selector(
         	item_size=gr.sizeof_float*1,
         	num_inputs=2,
         	num_outputs=1,

@@ -46,6 +46,13 @@ set(VERSION_INFO_API_COMPAT    0)
 set(VERSION_INFO_MINOR_VERSION 0)
 set(VERSION_INFO_MAINT_VERSION git)
 
+cmake_policy(SET CMP0011 NEW)
+
+# Enable generation of compile_commands.json for code completion engines
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+set(GR_PYTHON_DIR /lib/python3.8/site-packages)
+
 ########################################################################
 # Compiler specific setup
 ########################################################################
@@ -75,13 +82,28 @@ if(NOT Boost_FOUND)
     message(FATAL_ERROR "Boost required to compile edacs")
 endif()
 
+# Search for GNU Radio and its components and versions. Add any
+# components required to the list of GR_REQUIRED_COMPONENTS (in all
+# caps such as FILTER or FFT) and change the version to the minimum
+# API compatible version required.
+set(GR_REQUIRED_COMPONENTS RUNTIME FFT)
+find_package(Gnuradio "3.8" REQUIRED)
+
+include(GrVersion)
+
 ########################################################################
 # Install directories
 ########################################################################
 include(GrPlatform) #define LIB_SUFFIX
+
+if(NOT CMAKE_MODULES_DIR)
+  set(CMAKE_MODULES_DIR lib${LIB_SUFFIX}/cmake)
+endif(NOT CMAKE_MODULES_DIR)
+
 set(GR_RUNTIME_DIR      bin)
 set(GR_LIBRARY_DIR      lib${LIB_SUFFIX})
 set(GR_INCLUDE_DIR      include/edacs)
+set(GR_CMAKE_DIR        ${CMAKE_MODULES_DIR}/edacs)
 set(GR_DATA_DIR         share)
 set(GR_PKG_DATA_DIR     ${GR_DATA_DIR}/${CMAKE_PROJECT_NAME})
 set(GR_DOC_DIR          ${GR_DATA_DIR}/doc)
@@ -118,14 +140,7 @@ endif(APPLE)
 find_package(CppUnit)
 find_package(Doxygen)
 
-# Search for GNU Radio and its components and versions. Add any
-# components required to the list of GR_REQUIRED_COMPONENTS (in all
-# caps such as FILTER or FFT) and change the version to the minimum
-# API compatible version required.
-set(GR_REQUIRED_COMPONENTS RUNTIME FFT)
-find_package(Gnuradio "3.7.2" REQUIRED)
-list(INSERT CMAKE_MODULE_PATH 0 ${CMAKE_SOURCE_DIR}/cmake/Modules)
-include(GrVersion)
+# set(GNURADIO_RUNTIME_LIBRARIES gnuradio-runtime gnuradio-fft gnuradio-filter ${GR_VOLK_LIB})
 
 if(NOT CPPUNIT_FOUND)
     message(FATAL_ERROR "CppUnit required to compile edacs")
@@ -150,13 +165,11 @@ include_directories(
     ${CMAKE_BINARY_DIR}/include
     ${Boost_INCLUDE_DIRS}
     ${CPPUNIT_INCLUDE_DIRS}
-    ${GNURADIO_ALL_INCLUDE_DIRS}
 )
 
 link_directories(
     ${Boost_LIBRARY_DIRS}
     ${CPPUNIT_LIBRARY_DIRS}
-    ${GNURADIO_RUNTIME_LIBRARY_DIRS}
 )
 
 # Set component parameters
@@ -189,9 +202,6 @@ add_subdirectory(docs)
 ########################################################################
 # Install cmake search helper for this library
 ########################################################################
-if(NOT CMAKE_MODULES_DIR)
-  set(CMAKE_MODULES_DIR lib${LIB_SUFFIX}/cmake)
-endif(NOT CMAKE_MODULES_DIR)
 
 install(FILES cmake/Modules/edacsConfig.cmake
     DESTINATION ${CMAKE_MODULES_DIR}/edacs
