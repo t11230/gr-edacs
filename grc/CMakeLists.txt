@@ -18,8 +18,8 @@
 # Boston, MA 02110-1301, USA.
 
 install(FILES
-    edacs_proc_msg.xml
-    edacs_handle_eot.xml
-    edacs_trunked_radio.xml
-    edacs_find_chan_nums.xml DESTINATION share/gnuradio/grc/blocks
+    edacs_proc_msg.block.yml
+    edacs_handle_eot.block.yml
+    edacs_trunked_radio.block.yml
+    edacs_find_chan_nums.block.yml DESTINATION share/gnuradio/grc/blocks
 )
