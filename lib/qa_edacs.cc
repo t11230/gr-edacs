@@ -27,10 +27,9 @@
 
 #include "qa_edacs.h"
 
-CppUnit::TestSuite *
-qa_edacs::suite()
+CppUnit::TestSuite* qa_edacs::suite()
 {
-  CppUnit::TestSuite *s = new CppUnit::TestSuite("edacs");
+    CppUnit::TestSuite* s = new CppUnit::TestSuite("edacs");
 
-  return s;
+    return s;
 }

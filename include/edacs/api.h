@@ -25,9 +25,9 @@
 #include <gnuradio/attributes.h>
 
 #ifdef gnuradio_edacs_EXPORTS
-#  define EDACS_API __GR_ATTR_EXPORT
+#define EDACS_API __GR_ATTR_EXPORT
 #else
-#  define EDACS_API __GR_ATTR_IMPORT
+#define EDACS_API __GR_ATTR_IMPORT
 #endif
 
 #endif /* INCLUDED_EDACS_API_H */
