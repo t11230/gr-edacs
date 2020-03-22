@@ -24,6 +24,7 @@
 
 #include "proc_msg_impl.h"
 #include <gnuradio/io_signature.h>
+#include <iostream>
 
 
 namespace gr {
@@ -93,9 +94,7 @@ proc_msg_impl::proc_msg_impl(uint16_t talkgroup,
     target_fleet = (FLEET_MASK & talkgroup) >> 4;
     target_subfleet = (SUBFLEET_MASK & talkgroup);
 
-    if (scanning) {
-        printf("STARTING SCAN FOR CONTROL CHANNEL...\n");
-    }
+    printf("STARTING SCAN FOR CONTROL CHANNEL...\n");
 }
 
 /* Our virtual destructor */
@@ -284,102 +283,184 @@ int proc_msg_impl::general_work(int noutput_items,
                                 gr_vector_const_void_star& input_items,
                                 gr_vector_void_star& output_items)
 {
-    const unsigned char* in = (const unsigned char*)input_items[0];
-    unsigned char* out = (unsigned char*)output_items[0];
+    // First input stream
+    const auto in = reinterpret_cast<const uint8_t*>(input_items[0]);
+    const auto in_size = ninput_items[0];
 
+    // First output stream
+    auto out = reinterpret_cast<char*>(output_items[0]);
+
+    // Track how many output items we have produced
     int produced = 0;
-    int input_to_proc = (noutput_items / OUTPUT_LEN - 1) * PKT_LEN + 1;
 
-    /* Do <+signal processing+> */
-    for (int i = 0; i < input_to_proc; i++) {
-        if (in_msg) {
-            /* Message one */
-            if (pkt_index < PKT_LEN / 2) {
-                pkt[pkt_index] = in[i];
-                pkt_index++;
-            }
-            /* Message one complete */
-            else if (pkt_index == PKT_LEN / 2) {
-                split_msg(msg1, check_pkt());
-                filter_msg(msg1);
-                pkt[pkt_index - (PKT_LEN / 2)] = in[i];
-                pkt_index++;
-            }
-            /* Message two */
-            else if (pkt_index < PKT_LEN) {
-                pkt[pkt_index - (PKT_LEN / 2)] = in[i];
-                pkt_index++;
-            }
-            /* Message two complete */
-            else if (pkt_index == PKT_LEN) {
-                split_msg(msg2, check_pkt());
-                filter_msg(msg2);
-                in_msg = false;
-                pkt_index = 0;
+    // Process each bit that is provided
+    for (size_t idx = 0; idx < in_size; ++idx) {
+        const auto& current_item = in[idx];
 
-                produced += sprintf((char*)&out[produced],
-                                    "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
-                                    msg1.cmd,
-                                    msg1.lcn,
-                                    msg1.afs);
-                produced += sprintf((char*)&out[produced],
-                                    "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
-                                    msg2.cmd,
-                                    msg2.lcn,
-                                    msg2.afs);
-            }
+        // Currently reading a message off the wire
+        if (d_in_message) {
+
+            const auto output_items_available = noutput_items - produced;
+
+            produced += handle_message_bit(current_item & 1, output_items_available);
+
+            continue;
         }
-        /* Packet found -- bit 0x02 was set by Correlate Access Code block */
-        else if (in[i] & 0x02) {
-            in_msg = true;
-            clear_msg(msg1);
-            clear_msg(msg2);
-            pkt[pkt_index] = in[i] & ~0x02;
-            pkt_index++;
-            bit_count = 0;
-            /* Found the control channel... stop scanning */
-            if (scanning) {
-                printf("CONTROL CHANNEL FOUND\n");
-                ctrl_chan = chan_index + 1;
-                scanning = false;
-                if (d_find_lcns) {
-                    lf_lcn = true;
-                    ctrl_status = true;
-                }
-                delay = 0;
+
+        // Check if we have a pattern that matches the access code
+        if (current_item & 0x02) {
+
+            // In this case we have found the start of a message
+            begin_message();
+
+            if (d_scanning) {
+
+                std::cout << "Control channel found [" << d_current_channel << "]" << std::endl;
+
+                d_scanning = false;
+                d_control_channel = d_current_channel;
+
+                // TODO: Add channel finding back
             }
-        }
-        /* If one second has gone by without getting a packet, assume
-         * the control channel has changed and do another scan */
-        else if (!scanning) {
-            if (bit_count > BIT_RATE) {
-                bit_count = 0;
-                scanning = true;
-                delay = DELAY;
+
+            continue;
+        } 
+        
+        // As long as we are not scanning we should be receiving data
+        if (!d_scanning) {
+
+            // If one second has gone by without getting a packet, assume
+            // the control channel has changed and do another scan 
+            if (d_silent_bit_count > BIT_RATE) {
+                
+                std::cout << "No data received, Scanning for new control channel" << std::endl;
+
+                d_silent_bit_count = 0;
+                d_scanning = true;
+                break;
+
             } else {
-                bit_count++;
+                ++d_silent_bit_count;
             }
         }
     }
 
-    /* Can't detect the control channel... try the next frequency */
-    if (scanning && delay == 0) {
-        if (chan_index == MAX_CHANS - 1)
-            chan_index = 0;
-        else
-            chan_index++;
-        printf("TRYING NEXT CHANNEL -- %d\n", chan_index + 1);
-        pmt::pmt_t msg =
-            pmt::from_double((d_center_freq - d_freq_list[chan_index]) * pow(10, 6));
-        message_port_pub(pmt::mp("ctrl_freq"), msg);
-        delay = DELAY;
-    } else if (scanning && delay > 0) {
-        delay--;
+    if (d_scanning) {
+
+        // Check if we are waiting for a channel change to take effect
+
+        if (d_channel_change_delay > 0) {
+
+            --d_channel_change_delay;
+
+        } else {
+
+            // If not, go ahead and issue a new one
+
+            d_current_channel = (d_current_channel >= MAX_CHANS - 1) ? 0 : d_current_channel + 1;
+            d_channel_change_delay = DELAY;
+
+            std::cout << "Looking for control channel on [" << d_current_channel << "]" << std::endl;
+
+            auto msg = pmt::from_double((d_center_freq - d_freq_list[chan_index]) * pow(10, 6));
+
+            message_port_pub(pmt::mp("ctrl_freq"), msg);
+        }
     }
+
+    // int produced = 0;
+    // int input_to_proc = (noutput_items / OUTPUT_LEN - 1) * PKT_LEN + 1;
+
+    // /* Do <+signal processing+> */
+    // for (int i = 0; i < input_to_proc; i++) {
+    //     if (in_msg) {
+    //         /* Message one */
+    //         if (pkt_index < PKT_LEN / 2) {
+    //             pkt[pkt_index] = in[i];
+    //             pkt_index++;
+    //         }
+    //         /* Message one complete */
+    //         else if (pkt_index == PKT_LEN / 2) {
+    //             split_msg(msg1, check_pkt());
+    //             filter_msg(msg1);
+    //             pkt[pkt_index - (PKT_LEN / 2)] = in[i];
+    //             pkt_index++;
+    //         }
+    //         /* Message two */
+    //         else if (pkt_index < PKT_LEN) {
+    //             pkt[pkt_index - (PKT_LEN / 2)] = in[i];
+    //             pkt_index++;
+    //         }
+    //         /* Message two complete */
+    //         else if (pkt_index == PKT_LEN) {
+    //             split_msg(msg2, check_pkt());
+    //             filter_msg(msg2);
+    //             in_msg = false;
+    //             pkt_index = 0;
+
+    //             produced += sprintf((char*)&out[produced],
+    //                                 "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
+    //                                 msg1.cmd,
+    //                                 msg1.lcn,
+    //                                 msg1.afs);
+    //             produced += sprintf((char*)&out[produced],
+    //                                 "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
+    //                                 msg2.cmd,
+    //                                 msg2.lcn,
+    //                                 msg2.afs);
+    //         }
+    //     }
+    //     /* Packet found -- bit 0x02 was set by Correlate Access Code block */
+    //     else if (in[i] & 0x02) {
+    //         in_msg = true;
+    //         clear_msg(msg1);
+    //         clear_msg(msg2);
+    //         pkt[pkt_index] = in[i] & ~0x02;
+    //         pkt_index++;
+    //         bit_count = 0;
+    //         /* Found the control channel... stop scanning */
+    //         if (scanning) {
+    //             printf("CONTROL CHANNEL FOUND\n");
+    //             ctrl_chan = chan_index + 1;
+    //             scanning = false;
+    //             if (d_find_lcns) {
+    //                 lf_lcn = true;
+    //                 ctrl_status = true;
+    //             }
+    //             delay = 0;
+    //         }
+    //     }
+    //     /* If one second has gone by without getting a packet, assume
+    //      * the control channel has changed and do another scan */
+    //     else if (!scanning) {
+    //         if (bit_count > BIT_RATE) {
+    //             bit_count = 0;
+    //             scanning = true;
+    //             delay = DELAY;
+    //         } else {
+    //             bit_count++;
+    //         }
+    //     }
+    // }
+
+    // /* Can't detect the control channel... try the next frequency */
+    // if (scanning && delay == 0) {
+    //     if (chan_index == MAX_CHANS - 1)
+    //         chan_index = 0;
+    //     else
+    //         chan_index++;
+    //     printf("TRYING NEXT CHANNEL -- %d\n", chan_index + 1);
+    //     pmt::pmt_t msg =
+    //         pmt::from_double((d_center_freq - d_freq_list[chan_index]) * pow(10, 6));
+    //     message_port_pub(pmt::mp("ctrl_freq"), msg);
+    //     delay = DELAY;
+    // } else if (scanning && delay > 0) {
+    //     delay--;
+    // }
 
     /* Tell runtime system how many input items we consumed on
      * each input stream. */
-    consume_each(input_to_proc);
+    consume_each(in_size);
 
     /* Tell runtime system how many output items we produced. */
     return produced;

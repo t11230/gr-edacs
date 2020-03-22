@@ -8,7 +8,7 @@ parameters:
 -   id: talkgroup
     label: Talkgroup
     dtype: int
-    default: '1796'
+    default: '0'
 -   id: freq_list
     label: Frequency List
     dtype: raw

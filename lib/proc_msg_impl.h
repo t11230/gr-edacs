@@ -105,6 +105,18 @@ private:
     uint8_t target_fleet;
     uint8_t target_subfleet;
 
+    int handle_message_bit(bool bit, int output_items_available);
+    void begin_message();
+
+    bool d_in_message { false };
+    size_t d_message_buffer_bit_offset { 0 };
+
+    bool d_scanning { true };
+    int d_current_channel { 0 };
+    int d_control_channel { 0 };
+
+    size_t d_silent_bit_count { 0 };
+    size_t d_channel_change_delay { 0 };
 
 public:
     proc_msg_impl(uint16_t talkgroup,
