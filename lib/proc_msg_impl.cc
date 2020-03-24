@@ -25,6 +25,7 @@
 #include "proc_msg_impl.h"
 #include <gnuradio/io_signature.h>
 #include <iostream>
+#include <thread>
 
 namespace gr {
 namespace edacs {
@@ -80,7 +81,6 @@ void proc_msg_impl::change_eot_status(pmt::pmt_t msg)
     if (!to_bool(msg)) {
         std::cout << "Resetting current voice channel" << std::endl;
         d_current_voice_channel = 0;
-        std::cout << "Done " << int(d_current_voice_channel) << std::endl;
     }
 }
 
@@ -268,7 +268,6 @@ bool proc_msg_impl::filter_message(const control_message& msg)
 
     // If we are currently listening ignore it
     if (d_current_voice_channel) {
-        std::cout << "Filtered here" << int(d_current_voice_channel) << std::endl;
         return false;
     }
 
@@ -291,11 +290,6 @@ bool proc_msg_impl::filter_message(const control_message& msg)
 
     // At this point our message is valid and matches our filters
     return true;
-}
-
-std::pair<bool, bool> proc_msg_impl::filter_message_pair(const CtrlMessagePair& msg_pair)
-{
-    return { filter_message(msg_pair.first), filter_message(msg_pair.second) };
 }
 
 void proc_msg_impl::process_message(const control_message& msg)
@@ -322,6 +316,9 @@ void proc_msg_impl::process_message(const control_message& msg)
                msg.subfleet_id);
 
         out_msg = pmt::from_bool(false);
+    } else {
+        // Other message types not supported
+        return;
     }
 
     message_port_pub(pmt::mp("eot_status_out"), out_msg);
@@ -397,13 +394,11 @@ int proc_msg_impl::general_work(int noutput_items,
 
             produced += log_message_pair(message_pair, &out[produced], remaining);
 
-            const auto filter_result = filter_message_pair(message_pair);
-
-            if (filter_result.first) {
+            if (filter_message(message_pair.first)) {
                 process_message(message_pair.first);
             }
 
-            if (filter_result.second) {
+            if (filter_message(message_pair.second)) {
                 process_message(message_pair.second);
             }
         }

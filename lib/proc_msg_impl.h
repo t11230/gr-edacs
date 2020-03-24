@@ -84,8 +84,6 @@ private:
 
     bool filter_message(const control_message&);
 
-    std::pair<bool, bool> filter_message_pair(const CtrlMessagePair&);
-
     int log_message(const control_message&, char*, int);
 
     int log_message_pair(const CtrlMessagePair&, char*, int);
