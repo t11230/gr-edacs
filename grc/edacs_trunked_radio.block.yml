@@ -90,18 +90,6 @@ templates:
             track_digital=${track_digital},
             voice_threshold=${voice_threshold}
         )
-    callbacks:
-    - set_center_freq(${center_freq})
-    - set_freq_list(${freq_list})
-    - set_noise_threshold(${noise_threshold})
-    - set_sink_rate(${sink_rate})
-    - set_source_rate(${source_rate})
-    - set_talkgroup(${talkgroup})
-    - set_tone_threshold(${tone_threshold})
-    - set_find_lcns(${find_lcns})
-    - set_track_analog(${track_analog})
-    - set_track_digital(${track_digital})
-    - set_voice_threshold(${voice_threshold})
 
 documentation: "Description\n      The Trunked Radio block is a hierarchical block\
     \ used to track communications on a trunked radio system. Currently it supports\

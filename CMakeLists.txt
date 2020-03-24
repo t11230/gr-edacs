@@ -51,8 +51,6 @@ cmake_policy(SET CMP0011 NEW)
 # Enable generation of compile_commands.json for code completion engines
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-set(GR_PYTHON_DIR /lib/python3.8/site-packages)
-
 ########################################################################
 # Compiler specific setup
 ########################################################################

@@ -67,7 +67,7 @@ class trunked_radio(gr.hier_block2):
         _fp_sel_index_thread.start()
             
         self.rational_resampler_xxx_1 = filter.rational_resampler_fff(
-                interpolation=sink_rate / 8000,
+                interpolation=int(sink_rate / 8000),
                 decimation=1,
                 taps=None,
                 fractional_bw=None,

@@ -25,9 +25,14 @@
 #include "find_chan_nums_impl.h"
 #include <gnuradio/io_signature.h>
 #include <time.h>
+#include <cmath>
+#include <iostream>
 
 namespace gr {
 namespace edacs {
+
+// Static constexpr members require a definition
+constexpr int find_chan_nums_impl::FFT_SIZE;
 
 find_chan_nums::sptr find_chan_nums::make(std::vector<float> freq_list,
                                           float center_freq,
@@ -56,41 +61,36 @@ find_chan_nums_impl::find_chan_nums_impl(std::vector<float> freq_list,
     set_output_multiple(FFT_SIZE / 2);
     set_max_noutput_items(FFT_SIZE / 2);
 
-    fft_c = new fft::fft_real_rev(FFT_SIZE, 1);
-
     message_port_register_in(pmt::mp("status_in"));
     set_msg_handler(pmt::mp("status_in"),
                     boost::bind(&find_chan_nums_impl::scan_start, this, _1));
 
     message_port_register_out(pmt::mp("status_out"));
 
-    d_center_freq *= pow(10, 6);
-    n_chans = d_freq_list.size();
+    // Scale from provided frequencies to MHz
+    const auto FREQ_SCALE = 1000 * 1000;
+
+    d_center_freq *= FREQ_SCALE;
+
     bandwidth = d_samp_rate / 2.0;
     start_freq = d_center_freq - bandwidth;
     bin_freq = d_samp_rate / FFT_SIZE;
 
-    bin_indices = new int[n_chans];
-    chan_counts = new int[n_chans * n_chans];
+    d_bin_indices.resize(d_freq_list.size());
+    d_chan_counts.resize(d_freq_list.size() * d_freq_list.size());
 
-    msg = pmt::make_vector(n_chans, pmt::from_long(-1));
+    msg = pmt::make_vector(d_freq_list.size(), pmt::from_long(-1));
 
     /* Get values needed to index correctly into the bin buffer */
-    for (int i = 0; i < n_chans; i++)
-        bin_indices[i] =
-            ((d_freq_list[i] * pow(10, 6)) - start_freq) / d_samp_rate * FFT_SIZE;
 
-    scanning = false;
-}
+    const auto FFT_SCALE = d_samp_rate * FFT_SIZE;
 
-/*
- * Our virtual destructor.
- */
-find_chan_nums_impl::~find_chan_nums_impl()
-{
-    delete fft_c;
-    delete[] bin_indices;
-    delete[] chan_counts;
+    for (auto i = 0; i < d_freq_list.size(); i++) {
+        d_bin_indices[i] = ((d_freq_list[i] * FREQ_SCALE) - start_freq) / FFT_SCALE;
+        // printf("Bin indices[%d] = %d\n", i, d_bin_indices[i] );
+    }
+
+    d_scanning = false;
 }
 
 void find_chan_nums_impl::scan_start(pmt::pmt_t msg_in)
@@ -99,10 +99,11 @@ void find_chan_nums_impl::scan_start(pmt::pmt_t msg_in)
     ctrl_chan = pmt::to_long(pmt::vector_ref(msg_in, 1));
 
     /* If the control channel has changed, reset the counts */
-    if (pmt::to_long(pmt::vector_ref(msg_in, 2)))
-        std::fill(chan_counts, chan_counts + n_chans * n_chans, STARTING_WEIGHT);
+    if (pmt::to_long(pmt::vector_ref(msg_in, 2))) {
+        std::fill(d_chan_counts.begin(), d_chan_counts.end(), STARTING_WEIGHT);
+    }
 
-    scanning = true;
+    d_scanning = true;
 }
 
 void find_chan_nums_impl::mark_found_chans()
@@ -110,11 +111,11 @@ void find_chan_nums_impl::mark_found_chans()
     int chan_index;
     int positive_values = 0;
 
-    for (int i = 0; i < n_chans; i++) {
-        for (int j = 0; j < n_chans; j++) {
+    for (int i = 0; i < d_freq_list.size(); i++) {
+        for (int j = 0; j < d_freq_list.size(); j++) {
             if (j == ctrl_chan - 1)
                 continue;
-            if (chan_counts[i * n_chans + j] > 0) {
+            if (d_chan_counts[i * d_freq_list.size() + j] > 0) {
                 chan_index = j;
                 positive_values++;
             }
@@ -132,7 +133,7 @@ void find_chan_nums_impl::mark_found_chans()
 bool find_chan_nums_impl::found_all_chans()
 {
     int unknown_count = 0;
-    for (int i = 0; i < n_chans; i++) {
+    for (int i = 0; i < d_freq_list.size(); i++) {
         if (pmt::to_long(pmt::vector_ref(msg, i)) == -1)
             unknown_count++;
     }
@@ -141,9 +142,9 @@ bool find_chan_nums_impl::found_all_chans()
 
 void find_chan_nums_impl::print_table()
 {
-    for (int i = 0; i < n_chans; i++) {
-        for (int j = 0; j < n_chans; j++)
-            printf("%7d ", chan_counts[i * n_chans + j]);
+    for (int i = 0; i < d_freq_list.size(); i++) {
+        for (int j = 0; j < d_freq_list.size(); j++)
+            printf("%7d ", d_chan_counts[i * d_freq_list.size() + j]);
         if (pmt::to_long(pmt::vector_ref(msg, i)) != -1)
             printf("  *");
         printf("\n");
@@ -161,92 +162,95 @@ int find_chan_nums_impl::work(int noutput_items,
 
     static int count = 1;
 
-    if (scanning) {
-        if (count == 1) {
-            time(&time_start);
-            time_info = localtime(&time_start);
-        }
-        /* Compute the Fourier transform of the input */
-        memcpy(fft_c->get_inbuf(), in, sizeof(gr_complex) * FFT_SIZE / 2);
-        fft_c->execute();
-        memcpy(binbuf, fft_c->get_outbuf(), sizeof(float) * FFT_SIZE);
-
-        /* Put the spectral bins in the right order */
-        for (int i = 0; i < FFT_SIZE; i++) {
-            if (i < FFT_SIZE / 2)
-                binbuf_ordered[FFT_SIZE / 2 - i - 1] = abs(binbuf[i]);
-            else
-                binbuf_ordered[FFT_SIZE - abs(FFT_SIZE / 2 - i) - 1] = abs(binbuf[i]);
-        }
-
-        /* Iterate through the potential freqencies, marking where a signal is found by
-         * adding 1 to the apropriate index in chan_counts */
-        for (int i = 0; i < n_chans; i++) {
-            int i1, i2, i3;
-            i1 = bin_indices[i];
-            if (bin_indices[i] != 0)
-                i2 = bin_indices[i] - 1;
-            else
-                i2 = bin_indices[i];
-            if (bin_indices[i] != FFT_SIZE - 1)
-                i3 = bin_indices[i] + 1;
-            else
-                i3 = bin_indices[i];
-
-            /* Test the bin associated with the current test frequency along with the two
-             * adjacent bins */
-            if (binbuf_ordered[i1] > d_threshold || binbuf_ordered[i2] > d_threshold ||
-                binbuf_ordered[i3] > d_threshold)
-                chan_counts[(target_chan - 1) * n_chans + i] += INC_AMOUNT;
-            else
-                chan_counts[(target_chan - 1) * n_chans + i] -= DEC_AMOUNT;
-
-            if (VERBOSE_CHAN_PWR)
-                printf("%.4f ", binbuf_ordered[i1]);
-        }
-        if (VERBOSE_CHAN_PWR)
-            printf("\n\n");
-
-        mark_found_chans();
-
-        if (VERBOSE_COUNT_TABLE)
-            print_table();
-
-        if (found_all_chans()) {
-            print_table();
-            time(&time_stop);
-            seconds = difftime(time_stop, time_start);
-            printf("ALL CHANNEL NUMBERS FOUND\n");
-            printf("Number of scans: %d\n", count);
-            printf("Start time: %s", asctime(time_info));
-            printf("Time elapsed: %.f seconds\n", seconds);
-
-            if (TEST_CHAN_FINDER) {
-                bool test = true;
-                for (int i = 0; i < n_chans; i++) {
-                    if (pmt::to_long(pmt::vector_ref(msg, i)) != i &&
-                        i != ctrl_chan - 1) {
-                        test = false;
-                        break;
-                    }
-                }
-                if (test)
-                    printf("Test passed.\n");
-                else
-                    printf("Test failed.\n");
-                printf("\n\n");
-                /* Reset everything for another test round */
-                std::fill(chan_counts, chan_counts + n_chans * n_chans, STARTING_WEIGHT);
-                pmt::vector_fill(msg, pmt::from_long(-1));
-                count = 0;
-            }
-        }
-
-        count++;
-
-        scanning = false;
-        message_port_pub(pmt::mp("status_out"), msg);
+    if (!d_scanning) {
+        return noutput_items;
     }
+
+    if (count == 1) {
+        time(&time_start);
+        time_info = localtime(&time_start);
+    }
+
+    /* Compute the Fourier transform of the input */
+    memcpy(d_fft.get_inbuf(), in, sizeof(gr_complex) * FFT_SIZE / 2);
+    d_fft.execute();
+    memcpy(binbuf, d_fft.get_outbuf(), sizeof(float) * FFT_SIZE);
+
+    /* Put the spectral bins in the right order */
+    for (int i = 0; i < FFT_SIZE; i++) {
+        if (i < FFT_SIZE / 2) {
+            binbuf_ordered[FFT_SIZE / 2 - i - 1] = abs(binbuf[i]);
+        } else {
+            binbuf_ordered[FFT_SIZE - abs(FFT_SIZE / 2 - i) - 1] = abs(binbuf[i]);
+        }
+    }
+
+    /* Iterate through the potential freqencies, marking where a signal is found by
+     * adding 1 to the apropriate index in chan_counts */
+    for (int i = 0; i < d_freq_list.size(); i++) {
+        int i1, i2, i3;
+        i1 = d_bin_indices[i];
+
+        if (i1 != 0)
+            i2 = i1 - 1;
+        else
+            i2 = i1;
+
+        if (i1 != FFT_SIZE - 1)
+            i3 = i1 + 1;
+        else
+            i3 = i1;
+
+        /* Test the bin associated with the current test frequency along with the two
+         * adjacent bins */
+        if (binbuf_ordered[i1] > d_threshold || binbuf_ordered[i2] > d_threshold ||
+            binbuf_ordered[i3] > d_threshold) {
+            d_chan_counts[(target_chan - 1) * d_freq_list.size() + i] += INC_AMOUNT;
+        } else {
+            d_chan_counts[(target_chan - 1) * d_freq_list.size() + i] -= DEC_AMOUNT;
+        }
+
+        if (VERBOSE_CHAN_PWR)
+            printf("%.4f ", binbuf_ordered[i1]);
+    }
+    if (VERBOSE_CHAN_PWR)
+        printf("\n\n");
+
+    mark_found_chans();
+
+    if (found_all_chans()) {
+        print_table();
+        time(&time_stop);
+        seconds = difftime(time_stop, time_start);
+        printf("ALL CHANNEL NUMBERS FOUND\n");
+        printf("Number of scans: %d\n", count);
+        printf("Start time: %s", asctime(time_info));
+        printf("Time elapsed: %.f seconds\n", seconds);
+
+        if (TEST_CHAN_FINDER) {
+            bool test = true;
+            for (int i = 0; i < d_freq_list.size(); i++) {
+                if (pmt::to_long(pmt::vector_ref(msg, i)) != i && i != ctrl_chan - 1) {
+                    test = false;
+                    break;
+                }
+            }
+            if (test)
+                printf("Test passed.\n");
+            else
+                printf("Test failed.\n");
+            printf("\n\n");
+            /* Reset everything for another test round */
+            std::fill(d_chan_counts.begin(), d_chan_counts.end(), STARTING_WEIGHT);
+            pmt::vector_fill(msg, pmt::from_long(-1));
+            count = 0;
+        }
+    }
+
+    count++;
+
+    d_scanning = false;
+    message_port_pub(pmt::mp("status_out"), msg);
 
     return noutput_items;
 }

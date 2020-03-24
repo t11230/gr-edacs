@@ -26,7 +26,6 @@
 #include <gnuradio/io_signature.h>
 #include <iostream>
 
-
 namespace gr {
 namespace edacs {
 
@@ -53,9 +52,8 @@ proc_msg_impl::proc_msg_impl(uint16_t talkgroup,
                 gr::io_signature::make(1, 1, sizeof(unsigned char))),
       d_freq_list(freq_list),
       d_center_freq(center_freq),
-      d_find_lcns(find_lcns),
-      d_analog(analog),
-      d_digital(digital)
+      d_enable_analog_voice(analog),
+      d_enable_digital_voice(digital)
 {
     set_output_multiple(OUTPUT_LEN);
 
@@ -72,205 +70,271 @@ proc_msg_impl::proc_msg_impl(uint16_t talkgroup,
     message_port_register_out(pmt::mp("ctrl_freq"));
     message_port_register_out(pmt::mp("voice_freq"));
 
-    listening = false;
-    in_msg = false;
-    pkt_index = 0;
-    scanning = true;
-    lf_lcn = false;
-    chan_index = 0;
-    ctrl_chan = 0;
-    n_chans = d_freq_list.size();
-    chan_indices = new int[n_chans];
-    temp_freqs = new float[n_chans];
-    std::fill(chan_indices, chan_indices + n_chans, -1);
-    delay = DELAY;
-    bit_count = 0;
-
-    clear_msg(msg1);
-    clear_msg(msg2);
-    clear_msg(msg_target);
-
-    target_agency = (AGENCY_MASK & talkgroup) >> 8;
-    target_fleet = (FLEET_MASK & talkgroup) >> 4;
-    target_subfleet = (SUBFLEET_MASK & talkgroup);
-
-    printf("STARTING SCAN FOR CONTROL CHANNEL...\n");
+    d_target_agency = (AGENCY_MASK & talkgroup) >> 8;
+    d_target_fleet = (FLEET_MASK & talkgroup) >> 4;
+    d_target_subfleet = (SUBFLEET_MASK & talkgroup);
 }
 
-/* Our virtual destructor */
-proc_msg_impl::~proc_msg_impl()
+void proc_msg_impl::change_eot_status(pmt::pmt_t msg)
 {
-    delete[] chan_indices;
-    delete[] temp_freqs;
+    if (!to_bool(msg)) {
+        std::cout << "Resetting current voice channel" << std::endl;
+        d_current_voice_channel = 0;
+        std::cout << "Done " << int(d_current_voice_channel) << std::endl;
+    }
 }
-
-void proc_msg_impl::change_eot_status(pmt::pmt_t msg) { listening = to_bool(msg); }
 
 void proc_msg_impl::change_chan_status(pmt::pmt_t msg)
 {
-    if (d_find_lcns) {
-        lf_lcn = true;
-        int unknown_count = 0;
-        int i;
-        /* Check if all channel number have been found */
-        for (i = 0; i < n_chans; i++) {
-            chan_indices[i] = to_long(pmt::vector_ref(msg, i));
-            if (chan_indices[i] == -1)
-                unknown_count++;
-        }
-        /* All channel numbers have been found, so print out the proper
-         * frequency order and sort d_freq_list */
-        if (unknown_count <= 1 && !TEST_CHAN_FINDER) {
-            for (i = 0; i < n_chans; i++) {
-                if (chan_indices[i] == -1)
-                    temp_freqs[i] = d_freq_list[ctrl_chan - 1];
-                else
-                    temp_freqs[i] = d_freq_list[chan_indices[i]];
-            }
-            printf("Frequency Order:\n");
-            for (i = 0; i < n_chans - 1; i++) {
-                d_freq_list[i] = temp_freqs[i];
-                printf("%.4f, ", d_freq_list[i]);
-            }
-            d_freq_list[n_chans - 1] = temp_freqs[n_chans - 1];
-            printf("%.4f\n", d_freq_list[n_chans - 1]);
-            d_find_lcns = false;
-            lf_lcn = false;
-        }
+    // TODO: Get this working again
+    // if (d_find_lcns) {
+    //     lf_lcn = true;
+    //     int unknown_count = 0;
+    //     int i;
+    //     /* Check if all channel number have been found */
+    //     for (i = 0; i < n_chans; i++) {
+    //         chan_indices[i] = to_long(pmt::vector_ref(msg, i));
+    //         if (chan_indices[i] == -1)
+    //             unknown_count++;
+    //     }
+    //     /* All channel numbers have been found, so print out the proper
+    //      * frequency order and sort d_freq_list */
+    //     if (unknown_count <= 1 && !TEST_CHAN_FINDER) {
+    //         for (i = 0; i < n_chans; i++) {
+    //             if (chan_indices[i] == -1)
+    //                 temp_freqs[i] = d_freq_list[ctrl_chan - 1];
+    //             else
+    //                 temp_freqs[i] = d_freq_list[chan_indices[i]];
+    //         }
+    //         printf("Frequency Order:\n");
+    //         for (i = 0; i < n_chans - 1; i++) {
+    //             d_freq_list[i] = temp_freqs[i];
+    //             printf("%.4f, ", d_freq_list[i]);
+    //         }
+    //         d_freq_list[n_chans - 1] = temp_freqs[n_chans - 1];
+    //         printf("%.4f\n", d_freq_list[n_chans - 1]);
+    //         d_find_lcns = false;
+    //         lf_lcn = false;
+    //     }
+    // }
+}
+
+proc_msg_impl::control_message::control_message(uint64_t message_buffer)
+    : cmd((message_buffer >> 32) & 0xFF),
+      lcn(static_cast<uint8_t>((message_buffer) >> 27) & 0x1F),
+      status(static_cast<uint8_t>((message_buffer) >> 23) & 0x0F),
+      agency_id(static_cast<uint8_t>((message_buffer) >> 20) & 0x07),
+      fleet_id(static_cast<uint8_t>((message_buffer) >> 16) & 0xF),
+      subfleet_id(static_cast<uint8_t>((message_buffer) >> 12) & 0xF),
+      ecc(static_cast<uint16_t>((message_buffer) >> 0) & 0xFFF)
+{
+}
+
+uint16_t proc_msg_impl::control_message::afs() const
+{
+    return (agency_id << 8) | (fleet_id << 4) | subfleet_id;
+}
+
+void proc_msg_impl::begin_frame()
+{
+    d_in_frame = true;
+
+    // TODO: There appears to be a missing bit at the
+    // beginning of the stream. Not sure why
+    d_frame_buffer_bit_offset = 1;
+
+    // Indicate that we have heard valid bits
+    d_silent_bit_count = 0;
+}
+
+bool proc_msg_impl::handle_frame_bit(bool bit)
+{
+    if (d_frame_buffer_bit_offset >= sizeof(d_frame_buffer)) {
+        return false;
     }
-}
 
-int proc_msg_impl::get_chan() { return msg_target.lcn; }
+    d_frame_buffer[d_frame_buffer_bit_offset] = bit ? 1 : 0;
 
-void proc_msg_impl::clear_msg(msg& m)
-{
-    m.cmd = 0;
-    m.lcn = 0;
-    m.status = 0;
-    m.afs = 0;
-}
+    ++d_frame_buffer_bit_offset;
 
-void proc_msg_impl::cpy_msg(msg& source, msg& dest)
-{
-    dest.cmd = source.cmd;
-    dest.lcn = source.lcn;
-    dest.status = source.status;
-    dest.afs = source.afs;
-}
-
-uint64_t proc_msg_impl::check_pkt()
-{
-    uint64_t best_msg = 0;
-    uint64_t copy1, copy2, copy3;
-    int msg_len = PKT_LEN / 6;
-
-    for (int i = msg_len; i >= 0; --i) {
-        copy1 = pkt[i];
-        copy2 = ((~pkt[i + msg_len]) & 0x01);
-        copy3 = pkt[i + (msg_len * 2)];
-
-        if (copy1 == copy2) {
-            copy1 <<= msg_len - 1 - i;
-            best_msg |= copy1;
-        } else if (copy1 == copy3) {
-            copy1 <<= msg_len - 1 - i;
-            best_msg |= copy1;
-        } else if (copy2 == copy3) {
-            copy2 <<= msg_len - 1 - i;
-            best_msg |= copy2;
-        }
+    // Have we filled a complete frame?
+    if (d_frame_buffer_bit_offset < sizeof(d_frame_buffer)) {
+        return false;
     }
-    return best_msg;
+
+    // The current frame is done, so start looking for the next one
+    d_in_frame = false;
+
+    return true;
 }
 
-void proc_msg_impl::split_msg(msg& m, uint64_t best_msg)
+proc_msg_impl::CtrlMessagePair proc_msg_impl::parse_frame()
 {
-    /* Get command (cmd) */
-    m.cmd = (0x000000FF00000000 & best_msg) >> 32;
-    /* Get logical channel number (lcn) */
-    m.lcn = (0x00000000F8000000 & best_msg) >> 27;
-    /* Get status bits */
-    m.status = (0x0000000007800000 & best_msg) >> 23;
-    /* Get talkgroup (afs) */
-    m.afs = (0x00000000007FF000 & best_msg) >> 12;
-}
+    constexpr size_t MESSAGE_SIZE = 40;
 
-void proc_msg_impl::filter_msg(msg& m)
-{
-    uint8_t a = (0x0700 & m.afs) >> 8; /* Agency */
-    uint8_t f = (0x00F0 & m.afs) >> 4; /* Fleet */
-    uint8_t s = (0x000F & m.afs);      /* Subfleet */
+    constexpr size_t MESSAGE_1_BASE = MESSAGE_SIZE * 3 * 0;
+    constexpr size_t MESSAGE_2_BASE = MESSAGE_SIZE * 3 * 1;
 
-    uint8_t bit1 = (0x0008 & m.status) >> 3;
-    uint8_t bit2 = (0x0004 & m.status) >> 2;
-    uint8_t bit3 = (0x0002 & m.status) >> 1;
-    uint8_t bit4 = (0x0001 & m.status);
+    constexpr size_t COPY_1_BASE = MESSAGE_SIZE * 0;
+    constexpr size_t COPY_2_BASE = MESSAGE_SIZE * 1;
+    constexpr size_t COPY_3_BASE = MESSAGE_SIZE * 2;
 
-    /* Verify the command is valid,
-     * verify the channel is within EDACS bounds,
-     * ignore if the previous LCN is equal to the current LCN
-     * (preventing rapid swapping between a muted and unmuted state near the EOT),
-     * and ignore if we are already listening to a transmission */
-    if (((m.cmd == ANALOG_CMD && d_analog) || (m.cmd == DIGITAL_CMD && d_digital)) &&
-        m.lcn >= 1 && m.lcn <= MAX_CHANS && m.lcn != msg_target.lcn && !listening) {
+    uint64_t message_1_buffer = 0;
+    uint64_t message_2_buffer = 0;
 
-        /* If we are looking for lcn's in order to match them with frequencies,
-           send the current lcn to the Find Channel Number block */
-        if (d_find_lcns) {
-            if (lf_lcn && chan_indices[m.lcn - 1] == -1) {
-                pmt::pmt_t msg = pmt::make_vector(3, pmt::from_long(0));
-                pmt::vector_set(msg, 0, pmt::from_long(m.lcn));
-                pmt::vector_set(msg, 1, pmt::from_long(ctrl_chan));
-                pmt::vector_set(msg, 2, pmt::from_long(ctrl_status));
-                message_port_pub(pmt::mp("chan_status_out"), msg);
-                lf_lcn = false;
-                ctrl_status = false;
-            }
-            return;
-        }
+    for (size_t message_offset = 0; message_offset < MESSAGE_SIZE; ++message_offset) {
 
-        /* Assigns a channel by copying the received message into
-         * message_target. This only occurs if the proper conditions
-         * which indicate AFS matches/broadcasts are met. */
-        if (a == target_agency || a == 0 || target_agency == 0) {
-            if (f == target_fleet || f == 0 || target_fleet == 0) {
-                if (s == target_subfleet || s == 0 || target_subfleet == 0) {
-                    cpy_msg(m, msg_target);
+        uint8_t message_1_bit_accumulator = 0;
+        uint8_t message_2_bit_accumulator = 0;
 
-                    pmt::pmt_t msg;
-                    if (msg_target.cmd == DIGITAL_CMD) {
-                        msg = pmt::from_bool(true);
-                        printf("Digital voice channel assignment: %2d, Talkgroup: %4d "
-                               "(Agency %2d, Fleet %2d, Subfleet %2d)\n",
-                               msg_target.lcn,
-                               msg_target.afs,
-                               a,
-                               f,
-                               s);
-                    } else {
-                        msg = pmt::from_bool(false);
-                        printf("Analog voice channel assignment: %2d, Talkgroup: %4d "
-                               "(Agency %2d, Fleet %2d, Subfleet %2d)\n",
-                               msg_target.lcn,
-                               msg_target.afs,
-                               a,
-                               f,
-                               s);
-                    }
-                    // printf("Status bits: %d %d %d %d\n", bit1, bit2, bit3, bit4);
-                    message_port_pub(pmt::mp("eot_status_out"), msg);
+        message_1_bit_accumulator +=
+            (d_frame_buffer[MESSAGE_1_BASE + COPY_1_BASE + message_offset]) & 1;
+        message_2_bit_accumulator +=
+            (d_frame_buffer[MESSAGE_2_BASE + COPY_1_BASE + message_offset]) & 1;
 
-                    msg = pmt::from_double(
-                        (d_center_freq - d_freq_list[msg_target.lcn - 1]) * pow(10, 6));
-                    message_port_pub(pmt::mp("voice_freq"), msg);
+        message_1_bit_accumulator +=
+            (~d_frame_buffer[MESSAGE_1_BASE + COPY_2_BASE + message_offset]) & 1;
+        message_2_bit_accumulator +=
+            (~d_frame_buffer[MESSAGE_2_BASE + COPY_2_BASE + message_offset]) & 1;
 
-                    listening = true;
-                }
-            }
-        }
+        message_1_bit_accumulator +=
+            (d_frame_buffer[MESSAGE_1_BASE + COPY_3_BASE + message_offset]) & 1;
+        message_2_bit_accumulator +=
+            (d_frame_buffer[MESSAGE_2_BASE + COPY_3_BASE + message_offset]) & 1;
+
+        message_1_buffer |= static_cast<uint64_t>(message_1_bit_accumulator >= 2 ? 1 : 0)
+                            << (MESSAGE_SIZE - message_offset);
+        message_2_buffer |= static_cast<uint64_t>(message_2_bit_accumulator >= 2 ? 1 : 0)
+                            << (MESSAGE_SIZE - message_offset);
     }
+
+    // Construct 2 messages and return them
+    return { message_1_buffer, message_2_buffer };
 }
 
+int proc_msg_impl::log_message(const control_message& msg,
+                               char* log_buffer,
+                               int log_buffer_size)
+{
+    auto written = snprintf(log_buffer,
+                            log_buffer_size,
+                            "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
+                            msg.cmd,
+                            msg.lcn,
+                            msg.afs());
+
+    // Check for truncated output and add a null terminator
+    if (written >= log_buffer_size) {
+
+        log_buffer[log_buffer_size - 1] = '\x00';
+
+        written = log_buffer_size;
+    }
+
+    return written;
+}
+
+int proc_msg_impl::log_message_pair(const CtrlMessagePair& msg_pair,
+                                    char* log_buffer,
+                                    int log_buffer_size)
+{
+    int produced = 0;
+
+    produced += log_message(msg_pair.first, log_buffer, log_buffer_size);
+
+    const auto remaining = log_buffer_size - produced;
+
+    if (remaining <= 0) {
+        return produced;
+    }
+
+    produced += log_message(msg_pair.second, &log_buffer[produced], remaining);
+
+    return produced;
+}
+
+bool proc_msg_impl::filter_message(const control_message& msg)
+{
+    // Filter out voice types that we are not interested in
+    if ((msg.cmd == ANALOG_CMD && !d_enable_analog_voice) ||
+        (msg.cmd == DIGITAL_CMD && !d_enable_digital_voice)) {
+        return false;
+    }
+
+    // Sanity checking on the channel number
+    if (msg.lcn < 1 || msg.lcn > MAX_CHANS) {
+        return false;
+    }
+
+    // If we are currently listening ignore it
+    if (d_current_voice_channel) {
+        std::cout << "Filtered here" << int(d_current_voice_channel) << std::endl;
+        return false;
+    }
+
+    // TODO: Add channel finding logic back
+
+    // Check agency id
+    if (d_target_agency && msg.agency_id && msg.agency_id != d_target_agency) {
+        return false;
+    }
+
+    // Check fleet id
+    if (d_target_fleet && msg.fleet_id && msg.fleet_id != d_target_fleet) {
+        return false;
+    }
+
+    // Check subfleet id
+    if (d_target_subfleet && msg.subfleet_id && msg.subfleet_id != d_target_subfleet) {
+        return false;
+    }
+
+    // At this point our message is valid and matches our filters
+    return true;
+}
+
+std::pair<bool, bool> proc_msg_impl::filter_message_pair(const CtrlMessagePair& msg_pair)
+{
+    return { filter_message(msg_pair.first), filter_message(msg_pair.second) };
+}
+
+void proc_msg_impl::process_message(const control_message& msg)
+{
+    // Build notifications for the EOT block
+    pmt::pmt_t out_msg;
+
+    if (msg.cmd == DIGITAL_CMD) {
+        printf("Digital voice channel assignment: %2d "
+               "(Agency %2d, Fleet %2d, Subfleet %2d)\n",
+               msg.lcn,
+               msg.agency_id,
+               msg.fleet_id,
+               msg.subfleet_id);
+
+        out_msg = pmt::from_bool(true);
+
+    } else if (msg.cmd == ANALOG_CMD) {
+        printf("Analog voice channel assignment: %2d "
+               "(Agency %2d, Fleet %2d, Subfleet %2d)\n",
+               msg.lcn,
+               msg.agency_id,
+               msg.fleet_id,
+               msg.subfleet_id);
+
+        out_msg = pmt::from_bool(false);
+    }
+
+    message_port_pub(pmt::mp("eot_status_out"), out_msg);
+
+    // Now change our listening channel and update the tuned frequency
+    d_current_voice_channel = msg.lcn;
+
+    const auto lcn_freq = d_freq_list[d_current_voice_channel - 1];
+
+    const auto freq_offset = d_center_freq - lcn_freq;
+
+    message_port_pub(pmt::mp("voice_freq"), pmt::from_double(freq_offset * pow(10, 6)));
+}
 
 void proc_msg_impl::forecast(int noutput_items, gr_vector_int& ninput_items_required)
 {
@@ -297,43 +361,62 @@ int proc_msg_impl::general_work(int noutput_items,
     for (size_t idx = 0; idx < in_size; ++idx) {
         const auto& current_item = in[idx];
 
-        // Currently reading a message off the wire
-        if (d_in_message) {
-
-            const auto output_items_available = noutput_items - produced;
-
-            produced += handle_message_bit(current_item & 1, output_items_available);
-
-            continue;
-        }
-
         // Check if we have a pattern that matches the access code
         if (current_item & 0x02) {
 
-            // In this case we have found the start of a message
-            begin_message();
+            // In this case we have found the start of a frame
+            begin_frame();
 
             if (d_scanning) {
 
-                std::cout << "Control channel found [" << d_current_channel << "]" << std::endl;
+                std::cout << "Control channel found [" << d_current_channel << "]"
+                          << std::endl;
 
                 d_scanning = false;
                 d_control_channel = d_current_channel;
 
                 // TODO: Add channel finding back
             }
+        }
 
-            continue;
-        } 
-        
+        // Currently reading a frame off the wire
+        if (d_in_frame) {
+
+            // Accumulate bits and check if we have a complete frame
+            if (!handle_frame_bit((current_item & 1) == 1)) {
+
+                // If not, grab another bit from the wire
+                continue;
+            }
+
+            // Otherwise, parse the current frame
+
+            const auto message_pair = parse_frame();
+
+            const auto remaining = noutput_items - produced;
+
+            produced += log_message_pair(message_pair, &out[produced], remaining);
+
+            const auto filter_result = filter_message_pair(message_pair);
+
+            if (filter_result.first) {
+                process_message(message_pair.first);
+            }
+
+            if (filter_result.second) {
+                process_message(message_pair.second);
+            }
+        }
+
         // As long as we are not scanning we should be receiving data
         if (!d_scanning) {
 
             // If one second has gone by without getting a packet, assume
-            // the control channel has changed and do another scan 
+            // the control channel has changed and do another scan
             if (d_silent_bit_count > BIT_RATE) {
-                
-                std::cout << "No data received, Scanning for new control channel" << std::endl;
+
+                std::cout << "No data received, Scanning for new control channel"
+                          << std::endl;
 
                 d_silent_bit_count = 0;
                 d_scanning = true;
@@ -357,106 +440,20 @@ int proc_msg_impl::general_work(int noutput_items,
 
             // If not, go ahead and issue a new one
 
-            d_current_channel = (d_current_channel >= MAX_CHANS - 1) ? 0 : d_current_channel + 1;
+            d_current_channel =
+                (d_current_channel > MAX_CHANS) ? 1 : d_current_channel + 1;
+
             d_channel_change_delay = DELAY;
 
-            std::cout << "Looking for control channel on [" << d_current_channel << "]" << std::endl;
+            std::cout << "Looking for control channel on [" << d_current_channel << "]"
+                      << std::endl;
 
-            auto msg = pmt::from_double((d_center_freq - d_freq_list[chan_index]) * pow(10, 6));
+            auto msg = pmt::from_double(
+                (d_center_freq - d_freq_list[d_current_channel - 1]) * pow(10, 6));
 
             message_port_pub(pmt::mp("ctrl_freq"), msg);
         }
     }
-
-    // int produced = 0;
-    // int input_to_proc = (noutput_items / OUTPUT_LEN - 1) * PKT_LEN + 1;
-
-    // /* Do <+signal processing+> */
-    // for (int i = 0; i < input_to_proc; i++) {
-    //     if (in_msg) {
-    //         /* Message one */
-    //         if (pkt_index < PKT_LEN / 2) {
-    //             pkt[pkt_index] = in[i];
-    //             pkt_index++;
-    //         }
-    //         /* Message one complete */
-    //         else if (pkt_index == PKT_LEN / 2) {
-    //             split_msg(msg1, check_pkt());
-    //             filter_msg(msg1);
-    //             pkt[pkt_index - (PKT_LEN / 2)] = in[i];
-    //             pkt_index++;
-    //         }
-    //         /* Message two */
-    //         else if (pkt_index < PKT_LEN) {
-    //             pkt[pkt_index - (PKT_LEN / 2)] = in[i];
-    //             pkt_index++;
-    //         }
-    //         /* Message two complete */
-    //         else if (pkt_index == PKT_LEN) {
-    //             split_msg(msg2, check_pkt());
-    //             filter_msg(msg2);
-    //             in_msg = false;
-    //             pkt_index = 0;
-
-    //             produced += sprintf((char*)&out[produced],
-    //                                 "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
-    //                                 msg1.cmd,
-    //                                 msg1.lcn,
-    //                                 msg1.afs);
-    //             produced += sprintf((char*)&out[produced],
-    //                                 "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
-    //                                 msg2.cmd,
-    //                                 msg2.lcn,
-    //                                 msg2.afs);
-    //         }
-    //     }
-    //     /* Packet found -- bit 0x02 was set by Correlate Access Code block */
-    //     else if (in[i] & 0x02) {
-    //         in_msg = true;
-    //         clear_msg(msg1);
-    //         clear_msg(msg2);
-    //         pkt[pkt_index] = in[i] & ~0x02;
-    //         pkt_index++;
-    //         bit_count = 0;
-    //         /* Found the control channel... stop scanning */
-    //         if (scanning) {
-    //             printf("CONTROL CHANNEL FOUND\n");
-    //             ctrl_chan = chan_index + 1;
-    //             scanning = false;
-    //             if (d_find_lcns) {
-    //                 lf_lcn = true;
-    //                 ctrl_status = true;
-    //             }
-    //             delay = 0;
-    //         }
-    //     }
-    //     /* If one second has gone by without getting a packet, assume
-    //      * the control channel has changed and do another scan */
-    //     else if (!scanning) {
-    //         if (bit_count > BIT_RATE) {
-    //             bit_count = 0;
-    //             scanning = true;
-    //             delay = DELAY;
-    //         } else {
-    //             bit_count++;
-    //         }
-    //     }
-    // }
-
-    // /* Can't detect the control channel... try the next frequency */
-    // if (scanning && delay == 0) {
-    //     if (chan_index == MAX_CHANS - 1)
-    //         chan_index = 0;
-    //     else
-    //         chan_index++;
-    //     printf("TRYING NEXT CHANNEL -- %d\n", chan_index + 1);
-    //     pmt::pmt_t msg =
-    //         pmt::from_double((d_center_freq - d_freq_list[chan_index]) * pow(10, 6));
-    //     message_port_pub(pmt::mp("ctrl_freq"), msg);
-    //     delay = DELAY;
-    // } else if (scanning && delay > 0) {
-    //     delay--;
-    // }
 
     /* Tell runtime system how many input items we consumed on
      * each input stream. */

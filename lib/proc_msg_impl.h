@@ -22,6 +22,9 @@
 #define INCLUDED_EDACS_PROC_MSG_IMPL_H
 
 #include <edacs/proc_msg.h>
+#include <array>
+#include <atomic>
+#include <utility>
 
 /* Number of possible EDACS channels */
 #define MAX_CHANS 25
@@ -34,7 +37,7 @@
 #define FLEET_MASK 0x00F0
 #define SUBFLEET_MASK 0x000F
 /* Amount of characters that are output each frame */
-#define OUTPUT_LEN 84
+#define OUTPUT_LEN 85
 /* EDACS bits per second */
 #define BIT_RATE 9600
 /* Amount of samples to skip while waiting for a frequency shift to
@@ -53,70 +56,61 @@ namespace edacs {
 class proc_msg_impl : public proc_msg
 {
 private:
-    /* Struct containing message items (command, channel, status bits, and talkgroup) */
-    struct msg {
-        uint16_t cmd;
-        uint16_t lcn;
-        uint16_t status;
-        uint16_t afs;
-    } msg1, msg2, msg_target;
-
-    /* Sets each message member to 0 */
-    void clear_msg(msg& m);
-
-    /* Copies the contents of a source message to a destination message */
-    void cpy_msg(msg& source, msg& dest);
-
-    /* Returns an error corrected message by comparing bit triplets from three
-     * message copies and taking the majority of the three bits */
-    uint64_t check_pkt();
-
-    /* Takes in the entire integer representation of a message and places any
-     * relevant message items in to a struct. */
-    void split_msg(msg& m, uint64_t best_msg);
-
-    /* Copies a message to msg_target if the command is valid and the
-     * target talkgroup is part of the message talkgroup or vice versa */
-    void filter_msg(msg& m);
-
-    bool listening;
-    bool in_msg;
-    int pkt_index;
-    uint8_t pkt[PKT_LEN];
-    bool scanning;
-    uint16_t bit_count;
-
-    bool lf_lcn;
-    int chan_index;
-    int ctrl_chan;
-    int ctrl_status;
-    int n_chans;
-    int delay;
-    int* chan_indices;
-    float* temp_freqs;
-
     std::vector<float> d_freq_list;
     float d_center_freq;
-    bool d_find_lcns;
-    bool d_analog;
-    bool d_digital;
 
-    uint8_t target_agency;
-    uint8_t target_fleet;
-    uint8_t target_subfleet;
+    struct control_message {
+        control_message(uint64_t message_buffer);
 
-    int handle_message_bit(bool bit, int output_items_available);
-    void begin_message();
+        uint8_t cmd;
+        uint8_t lcn;
+        uint8_t status;
+        uint8_t agency_id;
+        uint8_t fleet_id;
+        uint8_t subfleet_id;
+        uint16_t ecc;
 
-    bool d_in_message { false };
-    size_t d_message_buffer_bit_offset { 0 };
+        uint16_t afs() const;
+    };
 
-    bool d_scanning { true };
-    int d_current_channel { 0 };
-    int d_control_channel { 0 };
+    using FrameBuffer = std::array<uint8_t, PKT_LEN>;
+    using CtrlMessagePair = std::pair<control_message, control_message>;
 
-    size_t d_silent_bit_count { 0 };
-    size_t d_channel_change_delay { 0 };
+    void begin_frame();
+
+    bool handle_frame_bit(bool bit);
+
+    CtrlMessagePair parse_frame();
+
+    bool filter_message(const control_message&);
+
+    std::pair<bool, bool> filter_message_pair(const CtrlMessagePair&);
+
+    int log_message(const control_message&, char*, int);
+
+    int log_message_pair(const CtrlMessagePair&, char*, int);
+
+    void process_message(const control_message&);
+
+    bool d_in_frame{ false };
+    size_t d_frame_buffer_bit_offset{ 0 };
+    FrameBuffer d_frame_buffer;
+
+    bool d_scanning{ true };
+    int d_current_channel{ 0 };
+    int d_control_channel{ 0 };
+
+    size_t d_silent_bit_count{ 0 };
+    size_t d_channel_change_delay{ 0 };
+
+    uint8_t d_target_agency{ 0 };
+    uint8_t d_target_fleet{ 0 };
+    uint8_t d_target_subfleet{ 0 };
+
+    bool d_enable_analog_voice{ true };
+    bool d_enable_digital_voice{ true };
+
+    std::atomic<int> d_current_voice_channel{ 0 };
 
 public:
     proc_msg_impl(uint16_t talkgroup,
@@ -125,11 +119,12 @@ public:
                   bool find_lcns,
                   bool analog,
                   bool digital);
-    ~proc_msg_impl();
+
+    virtual ~proc_msg_impl() = default;
 
     /* Gets the channel number from msg_target so the Function Probe block
      * (and therefore any block) can access it. */
-    int get_chan();
+    int get_chan() { return 0; };
 
     /* Called by the message handler when the Handle EOT block notifies
      * us that a transmission has ended (and we should stop listening). */

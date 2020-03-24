@@ -24,10 +24,8 @@
 #include <gnuradio/fft/fft.h>
 #include <edacs/find_chan_nums.h>
 
-/* Number of output bins from the FFT. Should be a power of two.
- * Note that if this value is too small, the resolution may not
- * be good enough to differentiate between channels */
-#define FFT_SIZE (1024 * 2)
+#define DEBUG_FIND_CHANNELS 1
+
 /* Starting amount of 'counts' given to each channel */
 #define STARTING_WEIGHT 100
 /* Amount to increment by if the channel power is over the specified threshold */
@@ -50,23 +48,36 @@ namespace edacs {
 class find_chan_nums_impl : public find_chan_nums
 {
 private:
+    /* Number of output bins from the FFT. Should be a power of two.
+     * Note that if this value is too small, the resolution may not
+     * be good enough to differentiate between channels */
+    static constexpr int FFT_SIZE = 1 << 12;
+
     /* If a message is received from controlling block, do a scan to
      * look for what channels are active */
     void scan_start(pmt::pmt_t msg);
+
     /* Sets the channel number in its appropriate frequency index */
     void mark_found_chans();
+
     /* Prints out the channel count table */
     void print_table();
+    
     /* Tests if all channel numbers have been determined
      * returns true if they have, false if they haven't */
     bool found_all_chans();
 
-    fft::fft_real_rev* fft_c;
-    bool scanning;
+    // FFT used to compute channel powers
+    fft::fft_real_rev d_fft { FFT_SIZE };
+
+    // Track whether we are currently scanning for channels
+    bool d_scanning { false };
+
     int target_chan;
-    int n_chans;
-    int* bin_indices;
-    int* chan_counts;
+    
+    std::vector<int> d_bin_indices;
+    std::vector<int> d_chan_counts;
+
     float start_freq;
     float bandwidth;
     float bin_freq;
@@ -88,7 +99,8 @@ public:
                         float center_freq,
                         float samp_rate,
                         float threshold);
-    ~find_chan_nums_impl();
+
+    ~find_chan_nums_impl() = default;
 
     // Where all the action really happens
     int work(int noutput_items,
