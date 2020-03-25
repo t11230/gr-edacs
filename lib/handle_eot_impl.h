@@ -25,48 +25,40 @@
 #include <gnuradio/filter/single_pole_iir.h>
 #include <edacs/handle_eot.h>
 
-/* Minimum number of input/output samples */
-#define N (1024 / 4)
-/* Number of work cycles to delay after muting is turned off
- * before muting is permitted again.
- * For example if N = 1024, samp_rate = 48000, and DELAY = 1,
- * the wait is ~0.0213s (N * DELAY / samp_rate). */
-#define DELAY 1
-/* Due to the interaction between the Selector block and the
- * Wav File Sink block we cannot switch between analog and digital
- * while outputting to a file, as it disconnects the block on the
- * switch. However, we can output a single type -- the type that
- * is first initialised. So set INIT_SEL_INDEX to 0 for analog or
- * 1 for digital if the Wav File Sink is needed and only one of
- * analog/digital are used.
- * NOTE: APPARENTLY THE WAV FILE SINK DOESNT WORK AT ALL WHEN USING
- * THE TRUNKING RADIO HIER BLOCK */
-#define INIT_SEL_INDEX 1
-
 namespace gr {
 namespace edacs {
 
 class handle_eot_impl : public handle_eot
 {
 private:
-    filter::single_pole_iir<double, double, double> iir;
-    double pwr;
-    fft::goertzel* g;
-    bool digital;
-    bool mute;
-    int delay;
-    int sel_index;
-    int d_samp_rate;
-    int d_tone_freq;
+    // If we are not muted, listen for the end of transmission
+    // tone. This is done using the Goertzel algorithm which is
+    // essentially an FFT for computing a single spectral bin.
+    // For EDACS this EOT tone is at 4800 Hz, so if the amplitude
+    // at this frequency is found to be greater than our defined
+    // threshold, we mute
+    fft::goertzel d_fft;
+
+    // In case we are sent to a frequency with no voice or we somehow
+    // miss the EOT tone sequence, try to detect static and correct by
+    // muting
+    filter::single_pole_iir<double, double, double> d_iir;
+
+    bool d_mute{ true };
+    size_t d_channel_change_delay{ 0 };
+    bool d_digital_assignment{ false };
     float d_tone_threshold;
     float d_noise_threshold;
+
+    void notify_eot();
 
 public:
     handle_eot_impl(int samp_rate,
                     int tone_freq,
                     float tone_threshold,
                     float noise_threshold);
-    ~handle_eot_impl();
+
+    virtual ~handle_eot_impl() = default;
 
     /* Getters & setters */
     void set_tone_threshold(float tone_threshold);

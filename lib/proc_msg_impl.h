@@ -26,39 +26,12 @@
 #include <atomic>
 #include <utility>
 
-/* Number of possible EDACS channels */
-#define MAX_CHANS 25
-/* Length of a frame not including the frame sync bit sequence.
- * There are 2 messages, each with 3 40 bit copies */
-#define PKT_LEN 240
-#define ANALOG_CMD 0xEE
-#define DIGITAL_CMD 0xEF
-#define AGENCY_MASK 0x0700
-#define FLEET_MASK 0x00F0
-#define SUBFLEET_MASK 0x000F
-/* Amount of characters that are output each frame */
-#define OUTPUT_LEN 85
-/* EDACS bits per second */
-#define BIT_RATE 9600
-/* Amount of samples to skip while waiting for a frequency shift to
- * take effect looking for the control channel. The samples have to
- * pass downstream from the signal source through many other blocks
- * until it reaches this block */
-#define DELAY 960
-/* Set to 1 to test the channel number finder (after finding all the
- * channel numbers, they will be reset and it will try to find them
- * again, looping like this forever */
-#define TEST_CHAN_FINDER 0
-
 namespace gr {
 namespace edacs {
 
 class proc_msg_impl : public proc_msg
 {
 private:
-    std::vector<float> d_freq_list;
-    float d_center_freq;
-
     struct control_message {
         control_message(uint64_t message_buffer);
 
@@ -73,29 +46,58 @@ private:
         uint16_t afs() const;
     };
 
-    using FrameBuffer = std::array<uint8_t, PKT_LEN>;
+    // 240 is the length of a frame in bits not including the
+    // frame sync bit sequence. There are 2 messages, each with
+    // 3 40-bit copies. We use 1 byte for each bit, space is not at
+    // a premium here
+    using FrameBuffer = std::array<uint8_t, 240>;
+
     using CtrlMessagePair = std::pair<control_message, control_message>;
 
+    // Called to reset frame buffers and begin receiving a new frame
     void begin_frame();
 
+    // Accumulates bits into the current frame buffer. Returns true
+    // when a frame is complete, false otherwise
     bool handle_frame_bit(bool bit);
 
+    // Parses the current frame buffer into a pair of messages
     CtrlMessagePair parse_frame();
 
+    // Checks if the provided message matches the configured
+    // filters and should be listened to
     bool filter_message(const control_message&);
 
+    // Logs a single message to the output buffer. Returns number of
+    // bytes written
     int log_message(const control_message&, char*, int);
 
+    // Logs a pair of messages to the output buffer. Returns number
+    // bytes written
     int log_message_pair(const CtrlMessagePair&, char*, int);
 
+    // Processes the provided messagem potentially resulting in
+    // a voice channel assignment
     void process_message(const control_message&);
+
+    // Converts the provided lcn to a frequency. Returns the frequency
+    // if the lcn is in the provided frequency list, otherwise 0
+    float lcn_to_frequency(int lcn);
+
+    // Converts the provided lcn to an offset from the center frequency.
+    // Returns the frequency if the lcn is in the provided frequency
+    // list, otherwise the center frequency
+    float lcn_to_offset(int lcn);
+
+    // NOTE: All internal frequencies are stored in MHz
+    std::vector<float> d_freq_list;
+    float d_center_freq;
 
     bool d_in_frame{ false };
     size_t d_frame_buffer_bit_offset{ 0 };
     FrameBuffer d_frame_buffer;
 
     bool d_scanning{ true };
-    int d_current_channel{ 0 };
     int d_control_channel{ 0 };
 
     size_t d_silent_bit_count{ 0 };
@@ -108,21 +110,24 @@ private:
     bool d_enable_analog_voice{ true };
     bool d_enable_digital_voice{ true };
 
-    std::atomic<int> d_current_voice_channel{ 0 };
+    int d_current_voice_channel{ 0 };
+
+    // Track how large each output item will be
+    size_t d_output_item_size{ 0 };
 
 public:
     proc_msg_impl(uint16_t talkgroup,
                   std::vector<float> freq_list,
                   float center_freq,
                   bool find_lcns,
-                  bool analog,
-                  bool digital);
+                  bool enable_analog_voice,
+                  bool enable_digital_voice);
 
     virtual ~proc_msg_impl() = default;
 
     /* Gets the channel number from msg_target so the Function Probe block
      * (and therefore any block) can access it. */
-    int get_chan() { return 0; };
+    int get_chan() { return d_current_voice_channel; };
 
     /* Called by the message handler when the Handle EOT block notifies
      * us that a transmission has ended (and we should stop listening). */

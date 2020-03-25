@@ -24,6 +24,11 @@
 
 #include "handle_eot_impl.h"
 #include <gnuradio/io_signature.h>
+#include <algorithm>
+
+namespace {
+constexpr size_t SAMPLES_PER_BATCH = (1024 / 4);
+}
 
 namespace gr {
 namespace edacs {
@@ -47,31 +52,19 @@ handle_eot_impl::handle_eot_impl(int samp_rate,
     : gr::sync_block("handle_eot",
                      gr::io_signature::make(1, 1, sizeof(float)),
                      gr::io_signature::make(1, 1, sizeof(float))),
-      d_samp_rate(samp_rate),
-      d_tone_freq(tone_freq),
       d_tone_threshold(tone_threshold),
-      d_noise_threshold(noise_threshold)
+      d_noise_threshold(noise_threshold),
+      d_fft(samp_rate, SAMPLES_PER_BATCH, tone_freq)
 {
-    set_output_multiple(N);
-    set_max_noutput_items(N);
+    set_output_multiple(SAMPLES_PER_BATCH);
+    set_max_noutput_items(SAMPLES_PER_BATCH);
 
     message_port_register_in(pmt::mp("status_in"));
     set_msg_handler(pmt::mp("status_in"),
                     boost::bind(&handle_eot_impl::change_status, this, _1));
 
     message_port_register_out(pmt::mp("status_out"));
-
-    g = new fft::goertzel(d_samp_rate, N, d_tone_freq);
-
-    mute = true;
-    delay = 0;
-    sel_index = INIT_SEL_INDEX;
 }
-
-/*
- * Our virtual destructor.
- */
-handle_eot_impl::~handle_eot_impl() { delete g; }
 
 void handle_eot_impl::set_tone_threshold(float tone_threshold)
 {
@@ -83,69 +76,94 @@ void handle_eot_impl::set_noise_threshold(float noise_threshold)
     d_noise_threshold = noise_threshold;
 }
 
-int handle_eot_impl::get_sel_index() { return sel_index; }
+int handle_eot_impl::get_sel_index() { return d_digital_assignment ? 1 : 0; }
 
 void handle_eot_impl::change_status(pmt::pmt_t msg)
 {
-    digital = to_bool(msg);
-    mute = false;
-    delay = DELAY;
+    d_digital_assignment = to_bool(msg);
+    d_mute = false;
+
+    // Wait for 2 batches of samples before muting again.
+    // For example if SAMPLES_PER_BATCH = 1024, samp_rate = 48000, and DELAY = 2,
+    // the wait is ~0.04s(SAMPLES_PER_BATCH * DELAY / samp_rate)
+
+    d_channel_change_delay = 2;
+}
+
+void handle_eot_impl::notify_eot()
+{
+    pmt::pmt_t msg = pmt::from_bool(false);
+
+    message_port_pub(pmt::mp("status_out"), msg);
+
+    d_mute = true;
 }
 
 int handle_eot_impl::work(int noutput_items,
                           gr_vector_const_void_star& input_items,
                           gr_vector_void_star& output_items)
 {
-    const float* in = (const float*)input_items[0];
-    float* out = (float*)output_items[0];
+    // First input stream
+    const auto in = reinterpret_cast<const float*>(input_items[0]);
 
-    /* If we are not muted, listen for the end of transmission
-     * tone. This is done using the Goertzel algorithm which is
-     * essentially an FFT for computing a single spectral bin.
-     * For EDACS this EOT tone is at 4800 Hz, so if the amplitude
-     * at this frequency is found to be greater than our defined
-     * threshold, we mute.
-     * For more information regarding this see:
-     * http://www.embedded.com/design/real-world-applications/4401754/
-       Single-tone-detection-with-the-Goertzel-algorithm */
-    if (!mute && delay == 0) {
-        float level = abs(g->batch((float*)in));
-        if (level > d_tone_threshold) {
-            pmt::pmt_t msg = pmt::from_bool(false);
-            message_port_pub(pmt::mp("status_out"), msg);
-            mute = true;
-            printf("END OF TRANSMISSION\n");
+    // First output stream
+    auto out = reinterpret_cast<float*>(output_items[0]);
+
+    const auto mute_output = [&]() { memset(out, 0, sizeof(float) * noutput_items); };
+
+    // Count down the delay for changing channels
+    if (d_mute || d_channel_change_delay > 0) {
+
+        --d_channel_change_delay;
+
+        mute_output();
+
+        return noutput_items;
+    }
+
+    // Ensure that the fft buffers are cleared
+    d_fft.output();
+
+    float max_noise_power = 0;
+
+    for (size_t idx = 0; idx < noutput_items; ++idx) {
+        const auto& item = in[idx];
+
+        // Otherwise wait for the EOT tone
+        d_fft.input(item);
+
+        const auto curent_noise_power = d_iir.filter(item * item);
+        if (curent_noise_power > max_noise_power) {
+            max_noise_power = curent_noise_power;
         }
     }
 
-    /* In case we are sent to a frequency with no voice or we somehow
-     * miss the EOT tone sequence, try to detect static and correct by
-     * muting. Problems still arise if we end up at a control channel
-     * as we will be stuck there, requiring a restart. */
-    if (!mute && delay == 0) {
-        /* Magic used in pwr_squelch_ff_impl.cc */
-        pwr = iir.filter(in[0] * in[0]);
-        if (pwr > d_noise_threshold) {
-            printf("NOISY CHANNEL, MUTING...\n");
-            pmt::pmt_t msg = pmt::from_bool(false);
-            message_port_pub(pmt::mp("status_out"), msg);
-            mute = true;
-        }
-        /* Update the index representing digital/analog. It can then
-           be accessed via a function probe for the selector block */
-        if (digital)
-            sel_index = 1;
-        else
-            sel_index = 0;
+    // If we didn't finish the fft don't do anything
+    if (!d_fft.ready()) {
+        return 0;
     }
 
-    if (delay > 0)
-        delay--;
+    const auto tone_power = abs(d_fft.output());
 
-    if (mute)
-        memset(out, 0, sizeof(float) * noutput_items);
-    else
+    if (max_noise_power > d_noise_threshold) {
+
+        std::cout << "Noisy channel, muting..." << std::endl;
+        notify_eot();
+
+    } else if (tone_power > d_tone_threshold) {
+
+        std::cout << "End of transmission: " << std::endl;
+        notify_eot();
+    }
+
+    if (d_mute) {
+        mute_output();
+
+    } else {
+
+        // If we are not muted, just forward samples from in to out
         memcpy(out, in, sizeof(float) * noutput_items);
+    }
 
     // Tell runtime system how many output items we produced.
     return noutput_items;

@@ -27,6 +27,35 @@
 #include <iostream>
 #include <thread>
 
+namespace {
+
+// Conversion factor from frequency number (801.2) to MHz
+constexpr float MHZ_SCALE = 1e6;
+
+// Maximum and minumum valid channel values
+constexpr auto MIN_EDACS_CHANNEL = 1;
+constexpr auto MAX_EDACS_CHANNEL = 25;
+
+// Shift masks for extracting AFS from talkgroup
+constexpr auto AGENCY_MASK = 0x0700;
+constexpr auto FLEET_MASK = 0x00F0;
+constexpr auto SUBFLEET_MASK = 0x000F;
+
+// Bitrate for EDACS control channel in bits / second
+constexpr auto EDACS_CONTROL_BITRATE = 9600;
+
+// Amount of samples to skip while waiting for a frequency shift to
+// take effect looking for the control channel. The samples have to
+// pass downstream from the signal source through many other blocks
+// until it reaches this block
+constexpr auto CHANNEL_CHANGE_DELAY = 960;
+
+// Basic commands that we support
+constexpr uint8_t ANALOG_VOICE_ASSIGN_CMD = 0xEE;
+constexpr uint8_t DIGITAL_VOICE_ASSIGN_CMD = 0xEF;
+
+} // namespace
+
 namespace gr {
 namespace edacs {
 
@@ -34,11 +63,15 @@ proc_msg::sptr proc_msg::make(uint16_t talkgroup,
                               std::vector<float> freq_list,
                               float center_freq,
                               bool find_lcns,
-                              bool analog,
-                              bool digital)
+                              bool enable_analog_voice,
+                              bool enable_digital_voice)
 {
-    return gnuradio::get_initial_sptr(
-        new proc_msg_impl(talkgroup, freq_list, center_freq, find_lcns, analog, digital));
+    return gnuradio::get_initial_sptr(new proc_msg_impl(talkgroup,
+                                                        freq_list,
+                                                        center_freq,
+                                                        find_lcns,
+                                                        enable_analog_voice,
+                                                        enable_digital_voice));
 }
 
 /* The private constructor */
@@ -46,17 +79,20 @@ proc_msg_impl::proc_msg_impl(uint16_t talkgroup,
                              std::vector<float> freq_list,
                              float center_freq,
                              bool find_lcns,
-                             bool analog,
-                             bool digital)
+                             bool enable_analog_voice,
+                             bool enable_digital_voice)
     : gr::block("proc_msg",
                 gr::io_signature::make(1, 1, sizeof(unsigned char)),
                 gr::io_signature::make(1, 1, sizeof(unsigned char))),
-      d_freq_list(freq_list),
-      d_center_freq(center_freq),
-      d_enable_analog_voice(analog),
-      d_enable_digital_voice(digital)
+      d_center_freq(center_freq * MHZ_SCALE),
+      d_enable_analog_voice(enable_analog_voice),
+      d_enable_digital_voice(enable_digital_voice)
 {
-    set_output_multiple(OUTPUT_LEN);
+    d_freq_list.reserve(freq_list.size());
+
+    for (const auto& freq : freq_list) {
+        d_freq_list.push_back(freq * MHZ_SCALE);
+    }
 
     message_port_register_in(pmt::mp("eot_status_in"));
     set_msg_handler(pmt::mp("eot_status_in"),
@@ -74,12 +110,20 @@ proc_msg_impl::proc_msg_impl(uint16_t talkgroup,
     d_target_agency = (AGENCY_MASK & talkgroup) >> 8;
     d_target_fleet = (FLEET_MASK & talkgroup) >> 4;
     d_target_subfleet = (SUBFLEET_MASK & talkgroup);
+
+    // Figure out how large our output items will be
+    char tmp_buffer[1024];
+    d_output_item_size =
+        log_message_pair({ { 0 }, { 0 } }, tmp_buffer, sizeof(tmp_buffer));
+
+    set_output_multiple(d_output_item_size);
+
+    std::cout << "Output size: " << d_output_item_size << " bytes" << std::endl;
 }
 
 void proc_msg_impl::change_eot_status(pmt::pmt_t msg)
 {
     if (!to_bool(msg)) {
-        std::cout << "Resetting current voice channel" << std::endl;
         d_current_voice_channel = 0;
     }
 }
@@ -216,14 +260,41 @@ int proc_msg_impl::log_message(const control_message& msg,
                                char* log_buffer,
                                int log_buffer_size)
 {
-    auto written = snprintf(log_buffer,
-                            log_buffer_size,
-                            "Command: 0x%02x Channel: %2d Talkgroup: %4d\n",
-                            msg.cmd,
-                            msg.lcn,
-                            msg.afs());
+    return snprintf(
+        log_buffer,
+        log_buffer_size,
+        "{ \"command\": \"0x%02x\", \"channel\": \"%2d\", \"talkgroup\": \"%4d\"}\n",
+        msg.cmd,
+        msg.lcn,
+        msg.afs());
+}
 
-    // Check for truncated output and add a null terminator
+int proc_msg_impl::log_message_pair(const CtrlMessagePair& msg_pair,
+                                    char* log_buffer,
+                                    int log_buffer_size)
+{
+    auto written = log_message(msg_pair.first, log_buffer, log_buffer_size);
+
+    // Check for truncated output and add a NULL terminator if needed
+    if (written >= log_buffer_size) {
+
+        log_buffer[log_buffer_size - 1] = '\x00';
+
+        // At this point we have completely filled the buffer, so just return early
+        return log_buffer_size;
+    }
+
+    // Now we will overwrite the NULL byte from the above snprintf and add
+    // the log string for the second message
+
+    const auto remaining = log_buffer_size - written;
+
+    written += log_message(msg_pair.second, &log_buffer[written], remaining);
+
+    // Add 1 to account the the NULL terminator added by snprintf
+    written += 1;
+
+    // Check for truncated output and add a NULL terminator if needed
     if (written >= log_buffer_size) {
 
         log_buffer[log_buffer_size - 1] = '\x00';
@@ -234,35 +305,16 @@ int proc_msg_impl::log_message(const control_message& msg,
     return written;
 }
 
-int proc_msg_impl::log_message_pair(const CtrlMessagePair& msg_pair,
-                                    char* log_buffer,
-                                    int log_buffer_size)
-{
-    int produced = 0;
-
-    produced += log_message(msg_pair.first, log_buffer, log_buffer_size);
-
-    const auto remaining = log_buffer_size - produced;
-
-    if (remaining <= 0) {
-        return produced;
-    }
-
-    produced += log_message(msg_pair.second, &log_buffer[produced], remaining);
-
-    return produced;
-}
-
 bool proc_msg_impl::filter_message(const control_message& msg)
 {
     // Filter out voice types that we are not interested in
-    if ((msg.cmd == ANALOG_CMD && !d_enable_analog_voice) ||
-        (msg.cmd == DIGITAL_CMD && !d_enable_digital_voice)) {
+    if ((msg.cmd == ANALOG_VOICE_ASSIGN_CMD && !d_enable_analog_voice) ||
+        (msg.cmd == DIGITAL_VOICE_ASSIGN_CMD && !d_enable_digital_voice)) {
         return false;
     }
 
     // Sanity checking on the channel number
-    if (msg.lcn < 1 || msg.lcn > MAX_CHANS) {
+    if (msg.lcn < MIN_EDACS_CHANNEL || msg.lcn > MAX_EDACS_CHANNEL) {
         return false;
     }
 
@@ -297,7 +349,7 @@ void proc_msg_impl::process_message(const control_message& msg)
     // Build notifications for the EOT block
     pmt::pmt_t out_msg;
 
-    if (msg.cmd == DIGITAL_CMD) {
+    if (msg.cmd == DIGITAL_VOICE_ASSIGN_CMD) {
         printf("Digital voice channel assignment: %2d "
                "(Agency %2d, Fleet %2d, Subfleet %2d)\n",
                msg.lcn,
@@ -307,7 +359,7 @@ void proc_msg_impl::process_message(const control_message& msg)
 
         out_msg = pmt::from_bool(true);
 
-    } else if (msg.cmd == ANALOG_CMD) {
+    } else if (msg.cmd == ANALOG_VOICE_ASSIGN_CMD) {
         printf("Analog voice channel assignment: %2d "
                "(Agency %2d, Fleet %2d, Subfleet %2d)\n",
                msg.lcn,
@@ -326,17 +378,38 @@ void proc_msg_impl::process_message(const control_message& msg)
     // Now change our listening channel and update the tuned frequency
     d_current_voice_channel = msg.lcn;
 
-    const auto lcn_freq = d_freq_list[d_current_voice_channel - 1];
+    const auto freq_offset = lcn_to_offset(d_current_voice_channel);
 
-    const auto freq_offset = d_center_freq - lcn_freq;
+    message_port_pub(pmt::mp("voice_freq"), pmt::from_double(freq_offset));
+}
 
-    message_port_pub(pmt::mp("voice_freq"), pmt::from_double(freq_offset * pow(10, 6)));
+float proc_msg_impl::lcn_to_frequency(int lcn)
+{
+    if (lcn < 1 || lcn > d_freq_list.size()) {
+
+        std::cout << "Invalid LCN: [" << std::dec << lcn << "]" << std::endl;
+
+        return 0;
+    }
+
+    return d_freq_list[lcn - 1];
+}
+
+float proc_msg_impl::lcn_to_offset(int lcn)
+{
+    return d_center_freq - lcn_to_frequency(lcn);
 }
 
 void proc_msg_impl::forecast(int noutput_items, gr_vector_int& ninput_items_required)
 {
-    /* The number of input items required to produce noutput_items */
-    ninput_items_required[0] = (noutput_items / OUTPUT_LEN - 1) * PKT_LEN + 1;
+    constexpr auto FRAME_LEN = std::tuple_size<FrameBuffer>::value;
+
+    if (ninput_items_required.empty()) {
+        return;
+    }
+
+    // The number of input items required to produce noutput_items
+    ninput_items_required[0] = (noutput_items / d_output_item_size - 1) * FRAME_LEN + 1;
 }
 
 int proc_msg_impl::general_work(int noutput_items,
@@ -366,11 +439,10 @@ int proc_msg_impl::general_work(int noutput_items,
 
             if (d_scanning) {
 
-                std::cout << "Control channel found [" << d_current_channel << "]"
+                std::cout << "Control channel found [" << d_control_channel << "]"
                           << std::endl;
 
                 d_scanning = false;
-                d_control_channel = d_current_channel;
 
                 // TODO: Add channel finding back
             }
@@ -408,7 +480,7 @@ int proc_msg_impl::general_work(int noutput_items,
 
             // If one second has gone by without getting a packet, assume
             // the control channel has changed and do another scan
-            if (d_silent_bit_count > BIT_RATE) {
+            if (d_silent_bit_count > EDACS_CONTROL_BITRATE) {
 
                 std::cout << "No data received, Scanning for new control channel"
                           << std::endl;
@@ -433,18 +505,26 @@ int proc_msg_impl::general_work(int noutput_items,
 
         } else {
 
-            // If not, go ahead and issue a new one
+            // If not, go ahead and change it now
 
-            d_current_channel =
-                (d_current_channel > MAX_CHANS) ? 1 : d_current_channel + 1;
+            // Handle case where we have not tuned to a control channel yet
+            // or we have exceeded the number of frequencies available
+            if (!d_control_channel || d_control_channel > d_freq_list.size()) {
 
-            d_channel_change_delay = DELAY;
+                d_control_channel = 1;
 
-            std::cout << "Looking for control channel on [" << d_current_channel << "]"
+            } else {
+
+                ++d_control_channel;
+            }
+
+            // Set up expected delay for channel change to take effect
+            d_channel_change_delay = CHANNEL_CHANGE_DELAY;
+
+            std::cout << "Looking for control channel on [" << d_control_channel << "]"
                       << std::endl;
 
-            auto msg = pmt::from_double(
-                (d_center_freq - d_freq_list[d_current_channel - 1]) * pow(10, 6));
+            auto msg = pmt::from_double(lcn_to_offset(d_control_channel));
 
             message_port_pub(pmt::mp("ctrl_freq"), msg);
         }
