@@ -132,6 +132,24 @@ blocks:
     coordinate: [42, 85]
     rotation: 0
     state: enabled
+- name: blocks_add_xx_0
+  id: blocks_add_xx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    num_inputs: '2'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1325, 96]
+    rotation: 0
+    state: true
 - name: blocks_delay_0
   id: blocks_delay
   parameters:
@@ -151,6 +169,24 @@ blocks:
     coordinate: [352, 500]
     rotation: 0
     state: enabled
+- name: blocks_multiply_const_vxx_0
+  id: blocks_multiply_const_vxx
+  parameters:
+    affinity: ''
+    alias: ''
+    comment: ''
+    const: 1-fp_sel_index
+    maxoutbuf: '0'
+    minoutbuf: '0'
+    type: float
+    vlen: '1'
+  states:
+    bus_sink: false
+    bus_source: false
+    bus_structure: null
+    coordinate: [1127, 81]
+    rotation: 0
+    state: true
 - name: blocks_multiply_xx_0
   id: blocks_multiply_xx
   parameters:
@@ -219,29 +255,6 @@ blocks:
     coordinate: [344, 332]
     rotation: 0
     state: enabled
-- name: blocks_selector_0
-  id: blocks_selector
-  parameters:
-    affinity: ''
-    alias: ''
-    comment: ''
-    enabled: 'True'
-    input_index: '0'
-    maxoutbuf: '0'
-    minoutbuf: '0'
-    num_inputs: '2'
-    num_outputs: '1'
-    output_index: '0'
-    showports: 'True'
-    type: float
-    vlen: '1'
-  states:
-    bus_sink: false
-    bus_source: false
-    bus_structure: null
-    coordinate: [1206, 33]
-    rotation: 0
-    state: true
 - name: blocks_unpack_k_bits_bb_0
   id: blocks_unpack_k_bits_bb
   parameters:
@@ -327,7 +340,7 @@ blocks:
     minoutbuf: '0'
     mod: dsd.dsd_MOD_AUTO_SELECT
     uvquality: '3'
-    verbosity: '0'
+    verbosity: '3'
   states:
     bus_sink: false
     bus_source: false
@@ -358,7 +371,7 @@ blocks:
   id: edacs_handle_eot
   parameters:
     affinity: ''
-    alias: ''
+    alias: edacs_handle_eot
     comment: ''
     maxoutbuf: '0'
     minoutbuf: '0'
@@ -370,7 +383,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [856, 24]
+    coordinate: [843, 24]
     rotation: 0
     state: enabled
 - name: edacs_proc_msg_0
@@ -608,7 +621,7 @@ blocks:
     bus_sink: false
     bus_source: false
     bus_structure: null
-    coordinate: [1040, 192]
+    coordinate: [1101, 152]
     rotation: 0
     state: enabled
 - name: sink_rate
@@ -735,18 +748,19 @@ connections:
 - [analog_quadrature_demod_cf_0, '0', edacs_handle_eot_0, '0']
 - [analog_sig_source_x_0, '0', blocks_multiply_xx_0, '1']
 - [analog_sig_source_x_1, '0', blocks_multiply_xx_1, '1']
+- [blocks_add_xx_0, '0', pad_sink_0, '0']
 - [blocks_delay_0, '0', edacs_find_chan_nums_0, '0']
+- [blocks_multiply_const_vxx_0, '0', blocks_add_xx_0, '0']
 - [blocks_multiply_xx_0, '0', low_pass_filter_0, '0']
 - [blocks_multiply_xx_1, '0', low_pass_filter_0_0, '0']
 - [blocks_not_xx_0, '0', blocks_unpack_k_bits_bb_0, '0']
 - [blocks_pack_k_bits_bb_0, '0', blocks_not_xx_0, '0']
-- [blocks_selector_0, '0', pad_sink_0, '0']
 - [blocks_unpack_k_bits_bb_0, '0', digital_correlate_access_code_bb_0, '0']
 - [digital_correlate_access_code_bb_0, '0', edacs_proc_msg_0, '0']
 - [digital_gfsk_demod_0, '0', blocks_pack_k_bits_bb_0, '0']
 - [dsd_block_ff_0, '0', rational_resampler_xxx_1, '0']
 - [edacs_find_chan_nums_0, status_out, edacs_proc_msg_0, chan_status_in]
-- [edacs_handle_eot_0, '0', blocks_selector_0, '0']
+- [edacs_handle_eot_0, '0', blocks_multiply_const_vxx_0, '0']
 - [edacs_handle_eot_0, '0', dsd_block_ff_0, '0']
 - [edacs_handle_eot_0, status_out, edacs_proc_msg_0, eot_status_in]
 - [edacs_proc_msg_0, '0', pad_sink_1, '0']
@@ -761,7 +775,7 @@ connections:
 - [pad_source_0, '0', blocks_multiply_xx_1, '0']
 - [rational_resampler_xxx_0, '0', digital_gfsk_demod_0, '0']
 - [rational_resampler_xxx_0_0, '0', analog_quadrature_demod_cf_0, '0']
-- [rational_resampler_xxx_1, '0', blocks_selector_0, '1']
+- [rational_resampler_xxx_1, '0', blocks_add_xx_0, '1']
 
 metadata:
   file_format: 1

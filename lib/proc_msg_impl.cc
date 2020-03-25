@@ -53,6 +53,7 @@ constexpr auto CHANNEL_CHANGE_DELAY = 960;
 // Basic commands that we support
 constexpr uint8_t ANALOG_VOICE_ASSIGN_CMD = 0xEE;
 constexpr uint8_t DIGITAL_VOICE_ASSIGN_CMD = 0xEF;
+constexpr uint8_t IDLE_CHANNEL_CMD = 0xFC;
 
 } // namespace
 
@@ -260,6 +261,9 @@ int proc_msg_impl::log_message(const control_message& msg,
                                char* log_buffer,
                                int log_buffer_size)
 {
+    if (msg.cmd == IDLE_CHANNEL_CMD) {
+        return 0;
+    }
     return snprintf(
         log_buffer,
         log_buffer_size,
@@ -295,12 +299,11 @@ int proc_msg_impl::log_message_pair(const CtrlMessagePair& msg_pair,
     written += 1;
 
     // Check for truncated output and add a NULL terminator if needed
-    if (written >= log_buffer_size) {
-
-        log_buffer[log_buffer_size - 1] = '\x00';
-
+    if (written > log_buffer_size) {
         written = log_buffer_size;
     }
+
+    log_buffer[written - 1] = '\x00';
 
     return written;
 }
