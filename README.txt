@@ -1,6 +1,6 @@
 == gr-edacs ==
 
-Author: Clayton Caron
+Authors: Clayton Caron, Tayler Burns
 
 Description:
     The purpose of this project is to provide an easy to use block for tracking 
@@ -9,7 +9,7 @@ Description:
     OsmoSDR block.
 
 Dependencies:
-    GNU Radio >= v3.7
+    GNU Radio >= v3.8.0
     BOOST
     CPPUNIT
     SWIG

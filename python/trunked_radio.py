@@ -1,30 +1,34 @@
 # -*- coding: utf-8 -*-
-##################################################
+
+#
+# SPDX-License-Identifier: GPL-3.0
+#
 # GNU Radio Python Flow Graph
-# Title: Trunked Radio
-# Generated: Sun Apr  2 22:54:01 2017
-##################################################
+# Title: Trunked Radio Hier
+# GNU Radio version: 3.8.0.0
 
 from gnuradio import analog
 from gnuradio import blocks
 from gnuradio import digital
 from gnuradio import filter
-from gnuradio import gr
 from gnuradio.filter import firdes
+from gnuradio import gr
+import sys
+import signal
 import dsd
 import edacs
-import math
-import threading
 import time
+import threading
 
 
-class trunked_radio(gr.hier_block2):
 
-    def __init__(self, center_freq=867.4105, find_chan_nums=False, freq_list=[866.0375, 866.2875, 866.5375, 866.7875, 867.0375, 867.2875, 867.5375, 867.7875, 868.0375, 868.2875, 868.5375, 868.7875, 866.0625, 866.3125, 866.5625, 866.8125, 867.0625, 867.3125, 867.5625, 867.8125], noise_threshold=5, sink_rate=48000, source_rate=4000000, talkgroup=1796, tone_threshold=0.1, track_analog=True, track_digital=False, voice_threshold=0.4):
+
+class trunked_radio_hier(gr.hier_block2):
+    def __init__(self, center_freq=867.4105, find_chan_nums=False, freq_list=[866.0375, 866.2875, 866.5375, 866.7875, 867.0375, 867.2875, 867.5375, 867.7875, 868.0375, 868.2875, 868.5375, 868.7875, 866.0625, 866.3125, 866.5625, 866.8125, 867.0625, 867.3125, 867.5625, 867.8125], noise_threshold=5, sink_rate=48000, source_rate=4000000, talkgroup=1796, tone_threshold=0.1, track_analog=True, track_digital=True, voice_threshold=0.4):
         gr.hier_block2.__init__(
             self, "Trunked Radio",
-            gr.io_signature(1, 1, gr.sizeof_gr_complex*1),
-            gr.io_signaturev(2, 2, [gr.sizeof_float*1, gr.sizeof_char*1]),
+                gr.io_signature(1, 1, gr.sizeof_gr_complex*1),
+                gr.io_signaturev(2, 2, [gr.sizeof_float*1, gr.sizeof_char*1]),
         )
 
         ##################################################
@@ -53,9 +57,9 @@ class trunked_radio(gr.hier_block2):
         # Blocks
         ##################################################
         self.edacs_handle_eot_0 = edacs.handle_eot(sink_rate, 4800, tone_threshold, noise_threshold)
-        
         def _fp_sel_index_probe():
             while True:
+
                 val = self.edacs_handle_eot_0.get_sel_index()
                 try:
                     self.set_fp_sel_index(val)
@@ -65,93 +69,99 @@ class trunked_radio(gr.hier_block2):
         _fp_sel_index_thread = threading.Thread(target=_fp_sel_index_probe)
         _fp_sel_index_thread.daemon = True
         _fp_sel_index_thread.start()
-            
+
         self.rational_resampler_xxx_1 = filter.rational_resampler_fff(
                 interpolation=int(sink_rate / 8000),
                 decimation=1,
                 taps=None,
-                fractional_bw=None,
-        )
-        self.rational_resampler_xxx_0_0 = filter.rational_resampler_ccc(
+                fractional_bw=None)
+        self.rational_resampler_xxx_0_0_0 = filter.rational_resampler_ccc(
                 interpolation=int(sink_rate / 1000),
-                decimation=int(source_rate / 100000),
+                decimation=int(source_rate / 1000),
                 taps=None,
-                fractional_bw=None,
-        )
+                fractional_bw=None)
         self.rational_resampler_xxx_0 = filter.rational_resampler_ccc(
                 interpolation=int(sink_rate / 1000),
                 decimation=int(source_rate / 100000),
                 taps=None,
-                fractional_bw=None,
-        )
-        self.low_pass_filter_0_0 = filter.fir_filter_ccf(100, firdes.low_pass(
-        	1, source_rate, .00625e6, .002e6, firdes.WIN_HAMMING, 6.76))
-        self.low_pass_filter_0 = filter.fir_filter_ccf(100, firdes.low_pass(
-        	1, source_rate, .00625e6, .002e6, firdes.WIN_HAMMING, 6.76))
-        self.edacs_proc_msg_0 = edacs.proc_msg(talkgroup, (freq_list), center_freq, find_chan_nums, track_analog, track_digital)
-        self.edacs_find_chan_nums_0 = edacs.find_chan_nums((freq_list), center_freq, source_rate, voice_threshold)
-        self.dsd_block_ff_0 = dsd.block_ff(dsd.dsd_FRAME_PROVOICE,dsd.dsd_MOD_AUTO_SELECT,3,False,0,True,0)
+                fractional_bw=None)
+        self.low_pass_filter_0 = filter.fir_filter_ccf(
+            100,
+            firdes.low_pass(
+                1,
+                source_rate,
+                .00625e6,
+                .002e6,
+                firdes.WIN_HAMMING,
+                6.76))
+        self.edacs_proc_msg_0 = edacs.proc_msg(talkgroup, freq_list, center_freq, find_chan_nums, track_analog, track_digital)
+        self.edacs_find_chan_nums_0 = edacs.find_chan_nums(freq_list, center_freq, source_rate, voice_threshold)
+        self.dsd_block_ff_0 = dsd.dsd_block_ff(dsd.dsd_FRAME_PROVOICE,dsd.dsd_MOD_AUTO_SELECT,3,False,3)
         self.digital_gfsk_demod_0 = digital.gfsk_demod(
-        	samples_per_symbol=samp_per_sym,
-        	sensitivity=1.0,
-        	gain_mu=0.175,
-        	mu=0.5,
-        	omega_relative_limit=0.005,
-        	freq_error=0.0,
-        	verbose=False,
-        	log=False,
-        )
+            samples_per_symbol=int(samp_per_sym),
+            sensitivity=1.0,
+            gain_mu=0.175,
+            mu=0.5,
+            omega_relative_limit=0.005,
+            freq_error=0.0,
+            verbose=False,
+            log=False)
         self.digital_correlate_access_code_bb_0 = digital.correlate_access_code_bb('010101010101010101010111000100100101010101010101', 0)
         self.blocks_unpack_k_bits_bb_0 = blocks.unpack_k_bits_bb(8)
         self.blocks_pack_k_bits_bb_0 = blocks.pack_k_bits_bb(8)
         self.blocks_not_xx_0 = blocks.not_bb()
         self.blocks_multiply_xx_1 = blocks.multiply_vcc(1)
         self.blocks_multiply_xx_0 = blocks.multiply_vcc(1)
+        self.blocks_multiply_const_vxx_0 = blocks.multiply_const_ff(1-fp_sel_index)
         self.blocks_delay_0 = blocks.delay(gr.sizeof_gr_complex*1, 1024)
-        self.blks2_selector_1 = blocks.selector(
-        	item_size=gr.sizeof_float*1,
-        	num_inputs=2,
-        	num_outputs=1,
-        	input_index=fp_sel_index,
-        	output_index=0,
+        self.blocks_add_xx_0 = blocks.add_vff(1)
+        self.analog_sig_source_x_1 = analog.sig_source_c(source_rate, analog.GR_COS_WAVE, 0, 1, 0, 0)
+        self.analog_sig_source_x_0 = analog.sig_source_c(source_rate, analog.GR_COS_WAVE, 0, 1, 0, 0)
+        self.analog_fm_demod_cf_0 = analog.fm_demod_cf(
+        	channel_rate=sink_rate,
+        	audio_decim=1,
+        	deviation=7000,
+        	audio_pass=6.25e3,
+        	audio_stop=10e3,
+        	gain=2.0,
+        	tau=75e-6,
         )
-        self.analog_sig_source_x_1 = analog.sig_source_c(source_rate, analog.GR_COS_WAVE, 0, 1, 0)
-        self.analog_sig_source_x_0 = analog.sig_source_c(source_rate, analog.GR_COS_WAVE, 0, 1, 0)
-        self.analog_quadrature_demod_cf_0 = analog.quadrature_demod_cf(1)
+
+
 
         ##################################################
         # Connections
         ##################################################
-        self.msg_connect((self.edacs_find_chan_nums_0, 'status_out'), (self.edacs_proc_msg_0, 'chan_status_in'))    
-        self.msg_connect((self.edacs_handle_eot_0, 'status_out'), (self.edacs_proc_msg_0, 'eot_status_in'))    
-        self.msg_connect((self.edacs_proc_msg_0, 'ctrl_freq'), (self.analog_sig_source_x_0, 'freq'))    
-        self.msg_connect((self.edacs_proc_msg_0, 'voice_freq'), (self.analog_sig_source_x_1, 'freq'))    
-        self.msg_connect((self.edacs_proc_msg_0, 'chan_status_out'), (self.edacs_find_chan_nums_0, 'status_in'))    
-        self.msg_connect((self.edacs_proc_msg_0, 'eot_status_out'), (self.edacs_handle_eot_0, 'status_in'))    
-        self.connect((self.analog_quadrature_demod_cf_0, 0), (self.edacs_handle_eot_0, 0))    
-        self.connect((self.analog_sig_source_x_0, 0), (self.blocks_multiply_xx_0, 1))    
-        self.connect((self.analog_sig_source_x_1, 0), (self.blocks_multiply_xx_1, 1))    
-        self.connect((self.blks2_selector_1, 0), (self, 0))    
-        self.connect((self.blocks_delay_0, 0), (self.edacs_find_chan_nums_0, 0))    
-        self.connect((self.blocks_multiply_xx_0, 0), (self.low_pass_filter_0, 0))    
-        self.connect((self.blocks_multiply_xx_1, 0), (self.low_pass_filter_0_0, 0))    
-        self.connect((self.blocks_not_xx_0, 0), (self.blocks_unpack_k_bits_bb_0, 0))    
-        self.connect((self.blocks_pack_k_bits_bb_0, 0), (self.blocks_not_xx_0, 0))    
-        self.connect((self.blocks_unpack_k_bits_bb_0, 0), (self.digital_correlate_access_code_bb_0, 0))    
-        self.connect((self.digital_correlate_access_code_bb_0, 0), (self.edacs_proc_msg_0, 0))    
-        self.connect((self.digital_gfsk_demod_0, 0), (self.blocks_pack_k_bits_bb_0, 0))    
-        self.connect((self.dsd_block_ff_0, 0), (self.rational_resampler_xxx_1, 0))    
-        self.connect((self.edacs_handle_eot_0, 0), (self.blks2_selector_1, 0))    
-        self.connect((self.edacs_handle_eot_0, 0), (self.dsd_block_ff_0, 0))    
-        self.connect((self.edacs_proc_msg_0, 0), (self, 1))    
-        self.connect((self.low_pass_filter_0, 0), (self.rational_resampler_xxx_0, 0))    
-        self.connect((self.low_pass_filter_0_0, 0), (self.rational_resampler_xxx_0_0, 0))    
-        self.connect((self, 0), (self.blocks_delay_0, 0))    
-        self.connect((self, 0), (self.blocks_multiply_xx_0, 0))    
-        self.connect((self, 0), (self.blocks_multiply_xx_1, 0))    
-        self.connect((self.rational_resampler_xxx_0, 0), (self.digital_gfsk_demod_0, 0))    
-        self.connect((self.rational_resampler_xxx_0_0, 0), (self.analog_quadrature_demod_cf_0, 0))    
-        self.connect((self.rational_resampler_xxx_1, 0), (self.blks2_selector_1, 1))    
+        self.msg_connect((self.edacs_find_chan_nums_0, 'status_out'), (self.edacs_proc_msg_0, 'chan_status_in'))
+        self.msg_connect((self.edacs_handle_eot_0, 'status_out'), (self.edacs_proc_msg_0, 'eot_status_in'))
+        self.msg_connect((self.edacs_proc_msg_0, 'ctrl_freq'), (self.analog_sig_source_x_0, 'freq'))
+        self.msg_connect((self.edacs_proc_msg_0, 'voice_freq'), (self.analog_sig_source_x_1, 'freq'))
+        self.msg_connect((self.edacs_proc_msg_0, 'chan_status_out'), (self.edacs_find_chan_nums_0, 'status_in'))
+        self.msg_connect((self.edacs_proc_msg_0, 'eot_status_out'), (self.edacs_handle_eot_0, 'status_in'))
+        self.connect((self.analog_fm_demod_cf_0, 0), (self.edacs_handle_eot_0, 0))
+        self.connect((self.analog_sig_source_x_0, 0), (self.blocks_multiply_xx_0, 1))
+        self.connect((self.analog_sig_source_x_1, 0), (self.blocks_multiply_xx_1, 1))
+        self.connect((self.blocks_add_xx_0, 0), (self, 0))
+        self.connect((self.blocks_delay_0, 0), (self.edacs_find_chan_nums_0, 0))
+        self.connect((self.blocks_multiply_const_vxx_0, 0), (self.blocks_add_xx_0, 0))
+        self.connect((self.blocks_multiply_xx_0, 0), (self.low_pass_filter_0, 0))
+        self.connect((self.blocks_multiply_xx_1, 0), (self.rational_resampler_xxx_0_0_0, 0))
+        self.connect((self.blocks_not_xx_0, 0), (self.blocks_unpack_k_bits_bb_0, 0))
+        self.connect((self.blocks_pack_k_bits_bb_0, 0), (self.blocks_not_xx_0, 0))
+        self.connect((self.blocks_unpack_k_bits_bb_0, 0), (self.digital_correlate_access_code_bb_0, 0))
+        self.connect((self.digital_correlate_access_code_bb_0, 0), (self.edacs_proc_msg_0, 0))
+        self.connect((self.digital_gfsk_demod_0, 0), (self.blocks_pack_k_bits_bb_0, 0))
+        self.connect((self.dsd_block_ff_0, 0), (self.rational_resampler_xxx_1, 0))
+        self.connect((self.edacs_handle_eot_0, 0), (self.blocks_multiply_const_vxx_0, 0))
+        self.connect((self.edacs_handle_eot_0, 0), (self.dsd_block_ff_0, 0))
+        self.connect((self.edacs_proc_msg_0, 0), (self, 1))
+        self.connect((self.low_pass_filter_0, 0), (self.rational_resampler_xxx_0, 0))
+        self.connect((self, 0), (self.blocks_delay_0, 0))
+        self.connect((self, 0), (self.blocks_multiply_xx_0, 0))
+        self.connect((self, 0), (self.blocks_multiply_xx_1, 0))
+        self.connect((self.rational_resampler_xxx_0, 0), (self.digital_gfsk_demod_0, 0))
+        self.connect((self.rational_resampler_xxx_0_0_0, 0), (self.analog_fm_demod_cf_0, 0))
+        self.connect((self.rational_resampler_xxx_1, 0), (self.blocks_add_xx_0, 1))
 
     def get_center_freq(self):
         return self.center_freq
@@ -176,7 +186,6 @@ class trunked_radio(gr.hier_block2):
 
     def set_noise_threshold(self, noise_threshold):
         self.noise_threshold = noise_threshold
-        self.edacs_handle_eot_0.set_noise_threshold(self.noise_threshold)
 
     def get_sink_rate(self):
         return self.sink_rate
@@ -190,10 +199,9 @@ class trunked_radio(gr.hier_block2):
 
     def set_source_rate(self, source_rate):
         self.source_rate = source_rate
-        self.low_pass_filter_0_0.set_taps(firdes.low_pass(1, self.source_rate, .00625e6, .002e6, firdes.WIN_HAMMING, 6.76))
-        self.low_pass_filter_0.set_taps(firdes.low_pass(1, self.source_rate, .00625e6, .002e6, firdes.WIN_HAMMING, 6.76))
-        self.analog_sig_source_x_1.set_sampling_freq(self.source_rate)
         self.analog_sig_source_x_0.set_sampling_freq(self.source_rate)
+        self.analog_sig_source_x_1.set_sampling_freq(self.source_rate)
+        self.low_pass_filter_0.set_taps(firdes.low_pass(1, self.source_rate, .00625e6, .002e6, firdes.WIN_HAMMING, 6.76))
 
     def get_talkgroup(self):
         return self.talkgroup
@@ -206,7 +214,6 @@ class trunked_radio(gr.hier_block2):
 
     def set_tone_threshold(self, tone_threshold):
         self.tone_threshold = tone_threshold
-        self.edacs_handle_eot_0.set_tone_threshold(self.tone_threshold)
 
     def get_track_analog(self):
         return self.track_analog
@@ -244,4 +251,4 @@ class trunked_radio(gr.hier_block2):
 
     def set_fp_sel_index(self, fp_sel_index):
         self.fp_sel_index = fp_sel_index
-        self.blks2_selector_1.set_input_index(int(self.fp_sel_index))
+        self.blocks_multiply_const_vxx_0.set_k(1-self.fp_sel_index)
