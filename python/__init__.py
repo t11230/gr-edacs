@@ -31,5 +31,5 @@ except ImportError:
 	pass
 
 # import any pure python here
-from .trunked_radio import trunked_radio
-#
+from .trunked_radio import trunked_radio_hier
+
